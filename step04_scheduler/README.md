@@ -143,7 +143,108 @@ Continuous Batching（step04）：
   ...     GPU 始终满载，新请求随到随处理
 ```
 
-## 运行
+## 为什么 Continuous Batching 直到 2022 年才出现？
+
+看完上面的设计，你可能会想：这个思路并不复杂，为什么没有更早引入？
+
+**调度逻辑确实简单，但高效实现它需要两个前提，而这两个前提在 2022 年之前都不成熟。**
+
+### 前提一：动态 KV Cache 内存管理
+
+Static Batching 下，KV Cache 内存很好管理：
+
+```
+batch 开始前：为每个请求预分配 max_len 大小的 KV Cache 内存块
+batch 结束后：整批一起释放
+
+内存布局（简单、规则）:
+  [请求A的KV: 500个槽位][请求B的KV: 500个槽位][请求C的KV: 500个槽位]
+```
+
+Continuous Batching 下，每个请求随时可能完成、随时可能插入新请求，
+KV Cache 的分配和释放变得**动态且不规则**：
+
+```
+时刻 0: [请求A的KV: 已用20槽][请求B的KV: 已用30槽][请求C的KV: 已用15槽]
+时刻 5: 请求B完成 → 释放它的内存
+        [请求A的KV: 已用25槽][           空洞           ][请求C的KV: 已用20槽]
+时刻 5: 请求E进入 → 在哪里分配它的内存？
+        [请求A的KV: 已用25槽][请求E的KV: 已用5槽 + 空闲][请求C的KV: 已用20槽]
+```
+
+**问题：GPU 显存没有像 CPU 那样的动态内存分配器（malloc/free）。**
+GPU 上的内存碎片问题非常严重——频繁分配和释放不规则大小的内存块后，
+剩余内存可能有很多，但全是碎片，放不下新的连续大块。
+
+解决方案是 vLLM（2023 年）提出的 **PagedAttention**——
+把 KV Cache 切成固定大小的小块（Block），像操作系统管理内存页一样管理，
+彻底解决碎片问题。**这就是 step06 的内容。**
+
+在 PagedAttention 出现之前，Continuous Batching 只能用简单粗暴的方法：
+预估最大需求量，一次性分配，碎片问题悬而未决。
+
+### 前提二：变长序列的高效注意力计算
+
+GPU 矩阵运算最擅长处理形状**规则**的输入。
+
+Static Batching 下，batch 内所有序列等长（padding 补齐），
+注意力计算的输入形状固定为 `[batch, seq_len, hidden]`，
+可以直接用标准 CUDA kernel 高效计算。
+
+Continuous Batching 下，同一 batch 内不同请求的序列长度**各不相同**：
+
+```
+某一步 decode：
+  请求A：已生成 47 个 token，KV Cache 有 47 个 K/V
+  请求B：已生成 312 个 token，KV Cache 有 312 个 K/V
+  请求C：刚进来做 prefill，prompt 有 128 个 token
+
+  这三个请求的注意力计算形状完全不同，无法简单地拼成一个矩阵
+```
+
+解决方案是 **FlashAttention 的变长序列支持**（`flash_attn_varlen_func`）——
+把不同长度的序列拼接成一个一维向量，用 `cu_seqlens`（每个序列的起止位置）
+告诉 kernel 边界在哪里，从而在一次 kernel 调用内处理所有序列：
+
+```
+传统做法（padding 补齐）:
+  输入: [A的47个token + 265个PAD, B的312个token, C的128个token + 184个PAD]
+  形状: [3, 312, 1024]  ← 大量 PAD，浪费
+
+FlashAttention varlen:
+  输入: [A的47个token, B的312个token, C的128个token]  ← 直接拼接
+  形状: [487, 1024]  ← 无 PAD，无浪费
+  cu_seqlens: [0, 47, 359, 487]  ← 告诉 kernel 每个序列的起止
+```
+
+**FlashAttention 的这个特性在 2022 年底才趋于成熟。**
+
+### 时间线
+
+```
+2017  Transformer 论文发布，推理系统普遍用 Static Batching
+2022  Orca 论文（OSDI'22）首次系统提出 Continuous Batching（iteration-level scheduling）
+      同年 FlashAttention v1/v2 发布，变长序列支持逐渐完善
+2023  vLLM 发布，结合 PagedAttention + Continuous Batching，成为主流推理框架
+      吞吐量比 HuggingFace 朴素推理提升约 23×
+```
+
+### 总结
+
+Continuous Batching 不需要特殊硬件，普通 GPU 就能跑。
+但高效实现它需要两个软件层面的支持：
+
+| 需要解决的问题 | 解决方案 | 在本教程的哪一步 |
+|--------------|---------|---------------|
+| KV Cache 动态内存管理（碎片问题） | PagedAttention | step06 |
+| 变长序列高效注意力计算（无需 padding） | FlashAttention varlen | step09 |
+
+本步（step04）的教学版实现绕开了这两个问题：
+每个请求独立维护自己的 `past_key_values`，内存由 Python 管理，不涉及 GPU 显存碎片；
+注意力计算沿用 step03a 的逐条处理方式，不做真正的 batch 注意力。
+**这样能清晰展示调度逻辑，后续步骤再逐一解决底层问题。**
+
+
 
 ```bash
 python run.py
