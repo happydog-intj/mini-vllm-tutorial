@@ -9,3 +9,4 @@ venv/
 *.safetensors
 models/
 .DS_Store
+.omc/
