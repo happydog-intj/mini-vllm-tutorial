@@ -39,19 +39,68 @@ V_i = W_V · (token_embedding[i] + position_embedding[i])
 
 注意这个性质依赖于**非因果注意力位置编码**（旋转位置编码 RoPE 或绝对位置编码均满足此条件）——相同 token 在相同位置，K/V 就相同。
 
-## 链式 xxhash：为什么不能用普通 hash？
+## 链式 xxhash：推导过程
 
-### 普通 hash 的问题
+### 第一步：为什么需要 hash？
 
-假设用 `hash(tokens[0:n])` 来索引缓存，会遇到两个问题：
+前缀缓存的核心操作是：**给定一段 token 序列，快速查找是否有对应的 K/V 已经缓存。**
 
-**问题1：碰撞风险**
-`hash([1, 2, 3])` 和 `hash([7, 8, 9])` 理论上可能碰撞，导致缓存误命中——拿到错误的 K/V。
+最直接的方案是把 token 序列本身作为字典的 key：
 
-**问题2：无法区分前缀关系**
-`hash([A, B, C])` 和 `hash([X, A, B, C])` 是完全独立的两个 hash 值，无法表达"后者的后缀包含前者"这一关系。
+```python
+cache[(72, 101, 108, 108, 111, ...)] = past_kv  # token tuple 作为 key
+```
 
-### 链式 hash 的设计
+问题：token 序列可能有几百上千个元素，每次查找都要比较整个元组，效率低。
+更重要的是，我们需要找**最长的匹配前缀**，要从长到短逐一尝试，每次都要构造一个新的 key。
+
+用 hash 可以把任意长度的 token 序列映射为一个固定大小的整数（64位），查找 O(1)。
+
+### 第二步：为什么不对每个 Block 独立 hash？
+
+把 prompt 按 `block_size=16` 切块，对每块独立计算 hash：
+
+```python
+h_block0 = xxhash64(tokens[0:16])   # 只看这16个token
+h_block1 = xxhash64(tokens[16:32])  # 只看这16个token
+h_block2 = xxhash64(tokens[32:48])
+```
+
+乍看可行，但存在一个根本问题：**相同 Block 内容 + 不同前缀 = 相同 hash，但缓存不能复用。**
+
+举个例子：
+
+```
+请求 A: [系统提示词版本1(block0)] + [用户问题X(block1)] + [更多内容...]
+请求 B: [系统提示词版本2(block0)] + [用户问题X(block1)] + [更多内容...]
+                  ↑ block0 不同                ↑ block1 的 token 完全相同
+```
+
+`h_block1` 在两个请求中相同（block1 的 token 一模一样），但能把请求A的 block1 缓存给请求B用吗？
+
+**不能。**
+
+原因在于前缀缓存的使用方式：调用模型时，你传入的是 `past_key_values`，它代表从位置 0 到当前位置的**连续 K/V 序列**：
+
+```python
+# 请求B复用请求A的block1时，会这样调用：
+logits, new_kv = model(
+    tokens_from_block2,
+    past_key_values=cached_kv_from_A_block1  # 这里的kv是基于请求A的block0计算出来的
+)
+```
+
+这意味着：请求B用了请求A的 block1 KV Cache，但请求A的 block1 KV 是在**请求A的 block0 计算完之后**的上下文里生成的（序列位置 16-31，且模型内部的残差流包含了 block0 的信息流）。如果两个请求的 block0 不同，直接复用 block1 的 KV 是错误的——**K/V 并不只取决于当前 block 的 token，还隐含了整个序列的上下文依赖。**
+
+> 等等——之前不是说 K_i 只取决于 token_i 和 position_i，与其他位置无关吗？
+>
+> 没错，在**单层注意力**中 K_i = W_K · x_i 确实如此。但 x_i 本身（第 i 个位置的隐状态）经过多层 Transformer 之后，已经包含了前面所有 token 通过注意力传递过来的信息。所以在第 L 层，`K_i^L` 实际上是依赖整个前缀的——只有第 1 层的输入（embedding）是独立的。
+
+因此，**如果两个请求从某个 Block 开始之前的内容不同，从那个 Block 起的所有 K/V 都必须重新计算，不能复用。**
+
+独立 Block hash 无法表达这种前缀依赖：即使 block1 的 token 一样，我们也不知道这个缓存条目对应的是哪种 block0。
+
+### 第三步：链式 hash 的设计
 
 将 token 序列按固定大小（`block_size=16`）切块，每块的 hash 把**前一块的 hash 值**纳入计算：
 
