@@ -179,6 +179,54 @@ Decode 推进（max_new_tokens = 20）:
            ↑ 有效 decode         ↑ 已完成但占着 GPU 槽位（浪费！）
 ```
 
+### 空转具体在做什么？
+
+以请求B（max_new=10）在第11步之后为例——它已经生成完了，
+但 Static Batching 要等请求C（max_new=20）跑完，所以 batch 还在继续。
+
+**每一步 decode，GPU 对 batch 里每个位置都要做完整的计算：**
+
+```
+Decode 第11步（请求B已完成）:
+
+  输入 token 矩阵: [请求A的token, 请求B的占位token, 请求C的token, 请求D的token]
+                                    ↑
+                              用什么填这里？
+                              只能用上一步的输出（或 PAD），
+                              但这个位置的结果根本不会被使用。
+
+  GPU 仍然完整执行：
+    1. Embedding 查表       ← 4个位置都查，包括请求B
+    2. 28层 × (注意力 + 线性层)  ← 请求B的位置全程参与矩阵乘法
+    3. 采样下一个token      ← 请求B也采样了一个token，直接丢弃
+```
+
+用代码来看，`engine.py` 里的实现：
+
+```python
+for step in range(max_new - 1):       # 循环到最长请求的步数
+    for i, (_, max_new_i) in enumerate(requests):
+        if done[i] or step >= max_new_i - 1:
+            done[i] = True
+            continue   # ← 请求B完成后，跳过它的decode
+        # 其他请求继续推进
+```
+
+教学版里用 `continue` 跳过了已完成请求（所以不会真正空转），
+但**真实的 Static Batching GPU 实现不会跳过**——原因是：
+
+```
+GPU 矩阵乘法的输入是整个 batch 矩阵，不能"挖掉"中间某一行：
+
+  batch 矩阵: [请求A, 请求B, 请求C, 请求D]   ← 4行，必须整体送入 GPU
+               不能变成: [请求A, 请求C, 请求D]  ← 3行，形状变了！
+
+  如果 batch 中间有空洞，GPU kernel 就要重新编译，代价更高。
+  所以实际做法是：保留请求B的行，让 GPU 算，结果直接丢弃。
+```
+
+这就是空转的本质：**GPU 为已完成的请求做了完整计算，但结果没有任何用处。**
+
 **本步 run.py 实测：Decode idle 浪费约 29%**
 
 ## 两大问题总结
