@@ -271,12 +271,6 @@ Continuous Batching 下请求随进随出，这种「一次性预分配大块」
 
 ### 前提二：变长序列的高效注意力计算
 
-GPU 矩阵运算最擅长处理形状**规则**的输入。
-
-Static Batching 下，batch 内所有序列等长（padding 补齐），
-注意力计算的输入形状固定为 `[batch, seq_len, hidden]`，
-可以直接用标准 CUDA kernel 高效计算。
-
 Continuous Batching 下，同一 batch 内不同请求的序列长度**各不相同**：
 
 ```
@@ -288,22 +282,70 @@ Continuous Batching 下，同一 batch 内不同请求的序列长度**各不相
   这三个请求的注意力计算形状完全不同，无法简单地拼成一个矩阵
 ```
 
-解决方案是 **FlashAttention 的变长序列支持**（`flash_attn_varlen_func`）——
-把不同长度的序列拼接成一个一维向量，用 `cu_seqlens`（每个序列的起止位置）
-告诉 kernel 边界在哪里，从而在一次 kernel 调用内处理所有序列：
+解决方案是 **FlashAttention 的变长序列接口**（`flash_attn_varlen_func`）：
 
 ```
 传统做法（padding 补齐）:
-  输入: [A的47个token + 265个PAD, B的312个token, C的128个token + 184个PAD]
+  输入: [A的47个token+265个PAD, B的312个token, C的128个token+184个PAD]
   形状: [3, 312, 1024]  ← 大量 PAD，浪费
 
 FlashAttention varlen:
-  输入: [A的47个token, B的312个token, C的128个token]  ← 直接拼接
-  形状: [487, 1024]  ← 无 PAD，无浪费
-  cu_seqlens: [0, 47, 359, 487]  ← 告诉 kernel 每个序列的起止
+  输入: [A的47个token, B的312个token, C的128个token]  ← 直接拼接，无 PAD
+  形状: [487, 1024]
+  cu_seqlens: [0, 47, 359, 487]  ← 告诉 GPU 每个序列的起止位置
 ```
 
-**FlashAttention 的这个特性在 2022 年底才趋于成熟。**
+**这个设计依赖 GPU 硬件吗？**
+
+分两层回答：
+
+**第一层：`varlen` 拼接接口本身是纯软件设计**
+
+把变长序列拼成一维、用 `cu_seqlens` 记录边界，这是软件层面的约定，
+和 GPU 硬件无关——只要注意力计算支持这种输入格式就行。
+
+**第二层：FlashAttention 的分块算法依赖 GPU 的片上缓存（SRAM）**
+
+FlashAttention 快的根本原因是把 Q/K/V 切成小块，每块放进 GPU 片上缓存
+（Shared Memory）里计算，避免反复读写显存（HBM）：
+
+```
+GPU 内存层次结构：
+
+  HBM（显存，大但慢）
+  ├── 容量：A100 = 80GB
+  └── 带宽：约 2TB/s
+
+  SRAM（片上缓存，小但极快）
+  ├── 容量：A100 每个计算单元组约 192KB
+  └── 带宽：约 19TB/s  ← 比 HBM 快 10倍！
+
+标准注意力：
+  scores = Q·Kᵀ 形状 [seq_len, seq_len]，必须完整写回 HBM
+  HBM 读写量: O(seq_len²)  ← seq_len=2048 时约 128MB/层
+
+FlashAttention（分块）：
+  把 Q 切成块 Q_i，K/V 切成块 K_j/V_j
+  每次把一小块加载进 SRAM，在 SRAM 内完成点积+softmax+加权，只写回最终结果
+  HBM 读写量: O(seq_len)  ← 减少了 seq_len 倍！
+```
+
+SRAM 的大小是硬件决定的：块大小随 SRAM 容量调整，SRAM 越大效率越高。
+不同 GPU 的 SRAM 大小不同，但 FlashAttention 在所有 NVIDIA GPU 上都有收益。
+
+**不同硬件的支持情况：**
+
+```
+NVIDIA GPU（CUDA）：  flash-attn 库完整支持，varlen 效果最好
+AMD GPU（ROCm）：     有移植版（hipFlashAttention），主流 GPU 都支持
+Apple MPS（M系列）：  flash-attn 不支持，用 PyTorch 内置的
+                      scaled_dot_product_attention 替代
+                      （有类似的 IO 优化但实现不同，本教程 step09 有回退逻辑）
+CPU：                 无 SRAM 优化，用标准矩阵乘法实现
+```
+
+**结论：** varlen 拼接是纯软件设计；FlashAttention 的 IO 加速依赖 GPU SRAM，
+NVIDIA GPU 支持最好，其他平台有替代方案。
 
 ### 时间线
 
