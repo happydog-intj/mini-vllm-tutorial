@@ -107,7 +107,7 @@ class Qwen3DecoderLayer(nn.Module):
             hidden_size=hidden_size,
             num_heads=config["num_attention_heads"],
             num_kv_heads=config["num_key_value_heads"],
-            head_dim=hidden_size // config["num_attention_heads"],
+            head_dim=config.get("head_dim", hidden_size // config["num_attention_heads"]),
             max_seq_len=config.get("max_position_embeddings", 4096),
             rope_theta=config.get("rope_theta", 1000000.0),
         )

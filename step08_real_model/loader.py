@@ -35,6 +35,9 @@ def iter_safetensors(model_path: str) -> Iterator[Tuple[str, Tensor]]:
 def load_weights(model: torch.nn.Module, model_path: str):
     state_dict = {}
     for name, tensor in iter_safetensors(model_path):
+        # HuggingFace checkpoints prefix all keys with "model." — strip it
+        if name.startswith("model."):
+            name = name[len("model."):]
         state_dict[name] = tensor.to(torch.bfloat16)
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     print(f"  权重加载完成，{len(state_dict)} 个参数张量")
