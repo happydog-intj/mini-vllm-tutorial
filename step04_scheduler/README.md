@@ -299,10 +299,19 @@ FlashAttention varlen:
 
 分两层回答：
 
-**第一层：`varlen` 拼接接口本身是纯软件设计**
+**第一层：`varlen` 拼接接口是 FlashAttention 库定义的输入格式**
 
-把变长序列拼成一维、用 `cu_seqlens` 记录边界，这是软件层面的约定，
-和 GPU 硬件无关——只要注意力计算支持这种输入格式就行。
+具体说：`flash_attn_varlen_func` 这个函数要求调用方把变长序列按特定格式传入——
+拼成一维张量 + `cu_seqlens` 数组。这是 FlashAttention 库作者**规定的接口格式**，
+不是 GPU 硬件要求的，也不是 CUDA 驱动要求的。
+
+换句话说，如果你自己写一个支持变长序列的注意力函数，完全可以用别的格式
+（比如 list of tensors，或者带 mask 的矩阵）。选择拼接+偏移量这种格式，
+是因为它对 GPU kernel 最友好：一块连续内存，kernel 内部用 `cu_seqlens[i]`
+和 `cu_seqlens[i+1]` 就能定位第 i 个序列的起止，不需要额外跳转。
+
+这个格式对 GPU 硬件没有特殊要求——任何支持 CUDA 的 GPU 都能跑，
+性能差异来自第二层（SRAM 大小），而不是这个接口本身。
 
 **第二层：FlashAttention 的分块算法依赖 GPU 的片上缓存（SRAM）**
 
@@ -344,7 +353,7 @@ Apple MPS（M系列）：  flash-attn 不支持，用 PyTorch 内置的
 CPU：                 无 SRAM 优化，用标准矩阵乘法实现
 ```
 
-**结论：** varlen 拼接是纯软件设计；FlashAttention 的 IO 加速依赖 GPU SRAM，
+**结论：** varlen 拼接格式是 FlashAttention 库的接口约定，任何 CUDA GPU 都能跑；FlashAttention 的 IO 加速依赖 GPU SRAM，
 NVIDIA GPU 支持最好，其他平台有替代方案。
 
 ### 时间线
