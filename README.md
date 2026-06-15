@@ -68,3 +68,7 @@ python run.py
 本项目是 [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm) 的教学版本：
 - nano-vllm：生产就绪，~1400 tok/s，代码精简但跳跃
 - mini-vllm-tutorial：教学优先，每步增量清晰，注释详尽
+
+## 总结
+
+学完所有步骤后，可以查看 [SUMMARY.md](SUMMARY.md)——汇总了推理服务的关键配置、监控指标和优化方法。
