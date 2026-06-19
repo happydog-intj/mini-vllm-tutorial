@@ -147,7 +147,99 @@ else:
 
 ---
 
-## 引擎实现：两阶段调用
+## Attention 代码修改：step01 vs step03a
+
+为了支持 KV Cache，Attention 层需要改动三处。对比两步的代码：
+
+### 改动一：函数签名新增 past_kv 参数
+
+```python
+# step01 的 MultiHeadAttention.forward：
+def forward(self, x: Tensor) -> Tensor:
+    # 无历史缓存概念，每次从头算
+
+# step03a 的 MultiHeadAttentionWithKVCache.forward：
+def forward(
+    self,
+    x: Tensor,                         # [seq_len, d_model]
+    past_kv: Optional[KVCache] = None, # ← 新增！None=Prefill，有值=Decode
+) -> Tuple[Tensor, KVCache]:           # ← 新增！返回值多了新的 KV
+```
+
+`past_kv=None` 时是 Prefill（计算整个序列），有值时是 Decode（只计算新 token，历史从缓存读）。
+
+### 改动二：KV 矩阵的拼接
+
+```python
+# step01：直接用当前输入的 K/V
+K_full = K   # [seq_len, heads, d_head]
+V_full = V
+
+# step03a：把历史 K/V 和当前新 token 的 K/V 拼接
+if past_kv is not None:
+    K_past, V_past = past_kv           # 历史：[old_len, heads, d_head]
+    K_full = torch.cat([K_past, K], dim=0)   # 拼接 → [old_len+1, heads, d_head]
+    V_full = torch.cat([V_past, V], dim=0)
+else:
+    K_full = K   # Prefill，直接使用
+    V_full = V
+```
+
+**这里是 KV Cache 的核心**：Decode 时 `x` 只有 1 个 token，算出 1 个新的 K/V，然后拼到历史上，注意力对全部历史 K/V 做点积。
+
+### 改动三：因果掩码的调整
+
+step01 中因果掩码的逻辑很简单——上三角全部屏蔽：
+
+```python
+# step01：seq_len × seq_len 的掩码，上三角置 -inf
+mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+scores = scores.masked_fill(mask, float("-inf"))
+```
+
+step03a 中需要处理 Prefill 和 Decode 两种情况：
+
+```python
+# step03a：
+past_len = total_len - seq_len   # 历史长度（Decode 时 seq_len=1）
+                                  # Prefill 时 past_len=0，Decode 时 past_len>0
+
+# scores 形状：[seq_len, total_len]
+# 例如 Decode 时：[1, old_len+1]
+# mask[i, j] = True 表示位置 i 不能看到位置 j
+
+mask = torch.ones(seq_len, total_len, dtype=torch.bool)
+for i in range(seq_len):
+    # 位置 i 可以看到：0 到 (past_len + i) 之间的所有历史
+    mask[i, :past_len + i + 1] = False   # False = 允许看到
+
+scores = scores.masked_fill(mask, float("-inf"))
+```
+
+**Decode 时（seq_len=1）**：
+- `mask[0, :total_len]` 全部设为 False
+- 新 token 能 attend 到所有历史 token（包括自己），完全不屏蔽
+- 这是正确的：新 token 是当前序列末尾，可以看所有历史
+
+**Prefill 时（seq_len=prompt_len，past_len=0）**：
+- 退化为标准的因果掩码，与 step01 行为完全一致
+
+### 改动四：返回值多了 new_kv
+
+```python
+# step01：只返回注意力输出
+return self.W_o(concat)
+
+# step03a：同时返回更新后的 KV 缓存
+return self.W_o(concat), (K_full, V_full)
+# K_full/V_full 包含历史+当前新 token，下一步 Decode 时作为 past_kv 传入
+```
+
+这四处改动合在一起，让 Attention 支持了 KV Cache 的增量计算。
+
+---
+
+
 
 `engine.py` 中 `KVCacheEngine.generate()` 清晰体现了两阶段：
 
