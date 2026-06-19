@@ -261,6 +261,84 @@ for _ in range(max_new_tokens - 1):
 
 ---
 
+## `torch.cat` 每步都分配新内存，有性能问题吗？
+
+有，而且在生产系统里不可接受。
+
+### 问题：每步都要搬一次完整的历史数据
+
+step03a 的实现里，每个 Decode 步骤都调用：
+
+```python
+K_full = torch.cat([K_past, K_new], dim=0)
+```
+
+`torch.cat` 的行为：
+1. 分配一块新的显存：大小 = (old_len + 1) × heads × d_head
+2. 把 `K_past` 的全部数据从旧地址**复制**到新地址
+3. 把 `K_new`（1 个 token）追加到末尾
+4. 旧的 `K_past` 张量变为待回收状态
+
+```
+Decode 第 k 步：
+
+  已有 K_past:  [K0, K1, ..., K(k-1)]       ← k 个 token 的显存
+                        ↓ torch.cat
+  新 K_full:    [K0, K1, ..., K(k-1), Kk]   ← 分配 (k+1) 个 token 的新显存
+                                              ← 把前 k 个 K 完整复制过去！
+  旧 K_past:    等待 Python GC 回收
+
+生成 n 个 token，第 k 步复制量 ∝ k
+总复制量 ∝ 1 + 2 + 3 + ... + n = O(n²)
+```
+
+即使 Q·K^T 的计算量只是 O(n)，**内存复制本身就是 O(n²)**——和朴素推理的计算量同阶。
+
+### 量化感受（Qwen3-0.6B，28层，8头，d_head=64）
+
+每层每 token 的 KV 大小 = 2 × 8 × 64 × 2字节(bf16) = 2KB，28层合计 56KB。
+
+```
+生成长度 n    第 n 步的单次复制量    生成全程累计复制量
+   100 token      5.6 MB              280 MB
+   500 token     28.0 MB             7,000 MB (7GB)
+  1000 token     56.0 MB            28,000 MB (28GB)
+```
+
+生成 1000 个 token，仅内存复制就要搬 28GB 数据。A100 显存带宽约 2TB/s，
+即使带宽全用于复制也要 14ms——实际上这段时间 GPU 计算单元全部空转。
+
+### 生产系统的做法：预分配 + in-place 写入
+
+vLLM / nano-vllm 的解法：**在推理开始前预分配最大容量的 KV Cache 张量，每步 in-place 写入，历史数据不动。**
+
+```python
+# 推理开始前，一次性分配好 max_len 的空间
+K_cache = torch.zeros(max_len, num_heads, d_head)  # 预分配，之后不再分配
+V_cache = torch.zeros(max_len, num_heads, d_head)
+
+# 每步 Decode：只写当前位置，不复制历史
+K_cache[current_pos] = K_new   # in-place 写入，O(1)，零复制！
+V_cache[current_pos] = V_new
+
+# 注意力计算时：切片读取，返回的是 view（引用），不复制数据
+K_full = K_cache[:current_pos + 1]   # O(1)，零复制！
+```
+
+每步内存操作从 O(k)（复制前 k 个 token）降为 O(1)（只写 1 个 token）。
+
+### 为什么 step03a 还是用 `torch.cat`？
+
+教学目的：`torch.cat` 写法最直观，第一次看代码就能理解「历史 KV 和新 KV 拼在一起」的语义，不需要理解预分配的下标管理逻辑。
+
+缺点（生产中不可接受）：
+- 每步 O(k) 的内存复制，总计 O(n²)
+- 频繁的显存分配/回收，加速 GPU 内存碎片化
+
+**step06 的 PagedAttention 进一步改进**：把 KV Cache 切成固定大小的 Block（如 16 个 token），每次只分配一个新 Block，既避免了 `torch.cat` 的整体复制，也解决了大块预分配带来的碎片问题。
+
+---
+
 ## 显存代价：内存换时间的权衡
 
 KV Cache 不是免费的午餐，它以**显存**换取**计算时间**：
