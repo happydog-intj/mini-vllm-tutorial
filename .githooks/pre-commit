@@ -1,0 +1,64 @@
+#!/bin/bash
+# pre-commit hook: 阻止敏感信息进入 commit
+
+SENSITIVE_PATTERNS=(
+    "shein"
+    "andyli1"
+    "andyli2"
+    "@shein\.com"
+    "andy\.li"
+    "10093140"
+)
+
+ERRORS=0
+
+# ── 1. 检查 commit author 邮箱 ──────────────────────────────────────────────
+AUTHOR_EMAIL=$(git config user.email)
+AUTHOR_NAME=$(git config user.name)
+
+for pattern in "${SENSITIVE_PATTERNS[@]}"; do
+    if echo "$AUTHOR_EMAIL" | grep -qi "$pattern"; then
+        echo "❌ [pre-commit] git user.email 包含敏感内容: $AUTHOR_EMAIL"
+        echo "   请运行: git config user.email \"bruceinpeking@gmail.com\""
+        ERRORS=$((ERRORS + 1))
+    fi
+    if echo "$AUTHOR_NAME" | grep -qi "$pattern"; then
+        echo "❌ [pre-commit] git user.name 包含敏感内容: $AUTHOR_NAME"
+        ERRORS=$((ERRORS + 1))
+    fi
+done
+
+# ── 2. 检查暂存文件内容 ───────────────────────────────────────────────────────
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [ -n "$STAGED_FILES" ]; then
+    while IFS= read -r file; do
+        # 跳过 hook 文件本身（模式列表会触发误报）
+        if [[ "$file" == *"pre-commit"* ]] || [[ "$file" == *".githooks"* ]]; then
+            continue
+        fi
+        # 跳过二进制文件
+        if ! git show ":$file" | file - | grep -q "text"; then
+            continue
+        fi
+        for pattern in "${SENSITIVE_PATTERNS[@]}"; do
+            MATCHES=$(git show ":$file" | grep -in "$pattern" 2>/dev/null)
+            if [ -n "$MATCHES" ]; then
+                echo "❌ [pre-commit] 文件 $file 包含敏感内容 ($pattern):"
+                echo "$MATCHES" | head -3 | sed 's/^/   /'
+                ERRORS=$((ERRORS + 1))
+            fi
+        done
+    done <<< "$STAGED_FILES"
+fi
+
+# ── 3. 结果 ──────────────────────────────────────────────────────────────────
+if [ $ERRORS -gt 0 ]; then
+    echo ""
+    echo "❌ 共发现 $ERRORS 处敏感信息，commit 已阻止。"
+    echo "   修复后重新 git add 并 commit。"
+    exit 1
+fi
+
+echo "✅ [pre-commit] 敏感信息检查通过"
+exit 0

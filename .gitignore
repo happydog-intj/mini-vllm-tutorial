@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -6,7 +7,47 @@ build/
 .venv/
 venv/
 *.pth
+
+# 模型权重（可能很大，且含私有模型）
 *.safetensors
+*.bin
+*.pt
+*.ckpt
 models/
+checkpoints/
+huggingface/
+
+# 系统文件
 .DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志 / 临时文件
+*.log
+*.tmp
+wandb/
+runs/
+outputs/
+
+# 敏感配置（API key、token 等）
+.env
+.env.*
+*.env
+secrets.yaml
+secrets.json
+config.local.*
+
+# oh-my-claudecode 状态文件
 .omc/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# benchmark 输出（可能含机器信息）
+benchmark_results/
