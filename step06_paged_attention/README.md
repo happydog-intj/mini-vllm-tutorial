@@ -31,6 +31,8 @@
 
 PagedAttention 的解法：借鉴操作系统虚拟内存的分页思想，把 KV Cache 切成固定大小的 **Block**，按需动态分配，Block 不需要连续。
 
+![PagedAttention 分页管理示意图](paged_attention_diagram.png)
+
 ---
 
 ## OS 虚拟内存分页的类比
