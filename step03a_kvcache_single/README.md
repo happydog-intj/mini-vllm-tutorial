@@ -320,7 +320,7 @@ vLLM / nano-vllm 的解法：**在推理开始前预分配最大容量的 KV Cac
 
 ```python
 # 推理开始前，一次性分配好 max_len 的空间
-K_cache = torch.zeros(max_len, num_heads, d_head)  # 预分配，之后不再分配
+K_cache = torch.zeros(max_len, num_heads, d_head)  # 预分配，之后不再分配，按照max_len预申请存在碎片的风险
 V_cache = torch.zeros(max_len, num_heads, d_head)
 
 # 每步 Decode：只写当前位置，不复制历史
@@ -405,6 +405,31 @@ KV Cache 效果 — NaiveEngine vs KVCacheEngine
 step03a 解决了单个请求的重复计算问题。
 
 但实际推理服务需要**同时服务多个用户**，每个请求的 prompt 长度不同、生成进度不同。
-直接把多个请求的 KV Cache 拼在一起，会遇到显存碎片化和序列对齐的问题。
+直接把多个请求的 KV Cache 拼在一起，会遇到两个问题：
+
+**问题1：显存碎片化**
+
+每个请求的生成长度事先未知，只能按最坏情况（max_len）预分配：
+
+```
+请求 A：实际生成  50 token，预分配 2048 → 浪费 97.6%
+请求 B：实际生成 2000 token，预分配 2048 → 几乎用满
+请求 C：实际生成  10 token，预分配 2048 → 浪费 99.5%
+```
+
+大量显存被"占着但没用"，新请求看到显存不够就只能排队——即使实际有效数据只占了显存的一小部分。
+
+**问题2：序列对齐**
+
+GPU 矩阵乘法要求 batch 内所有序列形状相同，但各请求长度不一：
+
+```
+请求 A：已生成 512 token，KV shape = [512, heads, d_head]
+请求 B：已生成 128 token，KV shape = [128, heads, d_head]
+请求 C：已生成 300 token，KV shape = [300, heads, d_head]
+```
+
+必须 padding 到同一长度（512），B 和 C 要对大量填充位置做无意义的注意力计算，浪费算力，且请求长度差异越大，浪费越严重。
 
 → **step03b**：多请求 Batch 推理——如何让多个请求共享一次 GPU 前向，同时管理各自的 KV Cache？
+step03b 用 attention mask 解决对齐问题；step06 的 PagedAttention 则从根本上消除显存碎片化。
