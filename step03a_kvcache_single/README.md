@@ -230,6 +230,30 @@ scores = scores.masked_fill(mask, float("-inf"))
 **Prefill 时（seq_len=prompt_len，past_len=0）**：
 - 退化为标准的因果掩码，与 step01 行为完全一致
 
+用矩阵直观表示（✓ = 允许 attend，✗ = 屏蔽为 -inf）：
+
+```
+Prefill 阶段（prompt = 4 个 token，past_len = 0）
+scores 形状：[4, 4]
+
+          K0   K1   K2   K3
+Q0  →  [  ✓    ✗    ✗    ✗  ]   ← token 0 只能看自己
+Q1  →  [  ✓    ✓    ✗    ✗  ]   ← token 1 能看 0,1
+Q2  →  [  ✓    ✓    ✓    ✗  ]   ← token 2 能看 0,1,2
+Q3  →  [  ✓    ✓    ✓    ✓  ]   ← token 3 能看全部
+
+经典下三角因果掩码，防止当前 token 看到未来 token。
+
+
+Decode 阶段（已有 4 个历史 token，新增 1 个 token）
+scores 形状：[1, 5]
+
+          K0   K1   K2   K3   K4(新)
+Q4  →  [  ✓    ✓    ✓    ✓    ✓  ]   ← 新 token 看全部历史 + 自己
+
+只有 1 行，不存在"看未来"的问题，全部允许。
+```
+
 ### 改动四：返回值多了 new_kv
 
 ```python
