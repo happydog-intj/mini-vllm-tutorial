@@ -2,7 +2,7 @@
 
 ## 教学目标
 
-把前几步学到的组件（注意力、MLP、归一化）组装成一个完整的 Transformer Decoder 层，并理解每个设计决策背后的原因：
+在 step00c 的注意力机制基础上，补全另外两个核心组件（MLP、归一化），并把三者组装成一个完整的 Transformer Decoder 层，理解每个设计决策背后的原因：
 
 - 为什么用 Pre-Norm 而不是 Post-Norm？
 - 残差连接解决什么问题？
@@ -239,4 +239,4 @@ TinyTransformer: 2层, d_model=128, heads=4, vocab=256
 
 ## 下一步
 
-完整的 Transformer Decoder 层已经就绪。但目前每次前向传播都从头计算所有 token 的注意力——包括已经计算过的历史 token。在自回归推理中，每生成一个新 token 就要重新算一遍所有历史，计算量随序列长度线性增长。下一步（step01）引入 **KV Cache**，缓存历史 token 的 Key/Value，让每步只需计算新 token 的注意力，把推理速度从 O(n²) 降到 O(n)。
+完整的 Transformer Decoder 层已经就绪。下一步（step01）将用这个结构搭建最朴素的自回归推理循环：每次生成一个 token，把它追加到序列末尾，再喂入模型预测下一个——这是理解所有后续优化的基准起点。

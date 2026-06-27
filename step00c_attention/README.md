@@ -227,4 +227,4 @@ def split_heads(t):
 
 但实际推理中面临新问题：**每次生成一个 token 时，K 和 V 都需要重新计算整个历史序列**，当序列很长时，这是极大的浪费。
 
-下一步（step01）将引入 **KV Cache**——把历史 token 的 K、V 缓存下来，每次只计算新 token 的 K、V 并追加，把注意力计算从 O(n²) 降为增量的 O(n)，这是实际推理引擎的基础优化。
+下一步（step00d）将引入另外两个组件——**MLP（SwiGLU）** 和 **归一化（RMSNorm）**，并把它们与注意力一起组装成一个完整的 Transformer Decoder 层。

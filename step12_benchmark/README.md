@@ -259,10 +259,4 @@ mini-vllm-tutorial Benchmark 工具
 
 ## 下一步
 
-本节的 benchmark 工具使用**顺序请求**，测量的是单请求延迟，不能反映真实并发场景下的系统行为。
-
-真实的 LLM 推理瓶颈往往在高并发时才会暴露：
-- Prefill 和 Decode 争抢 GPU 资源（prefill 是计算密集，decode 是带宽密集，二者特性不同）
-- KV Cache 空间不足导致请求等待（内存管理问题在高并发下被放大）
-
-下一步（Step 13）将引入**Chunked Prefill**——将长 prompt 的 prefill 拆分成多个小块，与 decode 交替执行。这样可以避免长 prefill 独占 GPU 导致 TTFT 突增，同时保持 decode 批次的连续性，是解决 prefill-decode 争抢问题的关键技术。
+本节的 benchmark 工具建立了性能基线。下一步（step13）将把引擎封装成 **HTTP 推理服务**：实现 OpenAI 兼容的 API 接口，让推理能力可以被其他程序、其他语言、其他机器通过网络调用。
