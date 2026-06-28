@@ -5,12 +5,11 @@ step08: Paged Prefix Cache 演示
   - 第一轮：冷启动，全部 miss，正常 prefill
   - 第二轮：相同请求，命中缓存，跳过前缀 prefill
   - 两轮输出完全相同（缓存只是优化，不改变数学结果）
-  - Scheduler 引擎：Continuous Batching + prefix cache，与串行版输出一致
 """
 
 import time
 import torch
-from engine import PagedPrefixCacheEngineV2, PagedPrefixCacheSchedulerEngine
+from engine import PagedPrefixCacheEngine
 
 SYSTEM_PROMPT_LEN = 32   # 共享前缀长度（模拟 system prompt）
 USER_QUESTION_LEN = 8    # 每个请求独有的后缀
@@ -35,12 +34,12 @@ def main():
     requests = make_requests(NUM_REQUESTS, SYSTEM_PROMPT_LEN, USER_QUESTION_LEN)
 
     print("=" * 60)
-    print("Paged Prefix Cache：Block 粒度前缀复用")
+    print("Paged Prefix Cache：Block 粒度前缀复用 + Continuous Batching")
     print("=" * 60)
     print(f"请求数: {NUM_REQUESTS}，共享前缀: {SYSTEM_PROMPT_LEN} tokens，"
           f"独有后缀: {USER_QUESTION_LEN} tokens，block_size: {BLOCK_SIZE}")
 
-    engine = PagedPrefixCacheEngineV2(block_size=BLOCK_SIZE, total_blocks=128)
+    engine = PagedPrefixCacheEngine(block_size=BLOCK_SIZE, total_blocks=128, max_running=4)
 
     # ── 第一轮：冷启动，全部 miss ──
     t0 = time.perf_counter()
@@ -79,37 +78,6 @@ def main():
     print(f"  所有 Block ref_count 正常 ✅")
 
     print("\n✅ step08_paged_prefix_cache 通过")
-
-    # ── Scheduler 引擎：Continuous Batching + prefix cache ──
-    print("\n" + "=" * 60)
-    print("Scheduler 引擎：Continuous Batching + Paged Prefix Cache")
-    print("=" * 60)
-
-    sched_engine = PagedPrefixCacheSchedulerEngine(
-        block_size=BLOCK_SIZE, total_blocks=128, max_running=4
-    )
-    sched_engine.model.load_state_dict(engine.model.state_dict())  # 复制权重确保可比较
-
-    t0 = time.perf_counter()
-    results_sched = sched_engine.generate_batch(requests)
-    t_sched = time.perf_counter() - t0
-
-    for i, (r_serial, r_sched) in enumerate(zip(results_warm, results_sched)):
-        assert torch.equal(r_serial, r_sched), \
-            f"请求 {i} scheduler 输出与串行版不一致！\n  串行: {r_serial}\n  sched: {r_sched}"
-
-    hits_s = sched_engine.cache_hits
-    misses_s = sched_engine.cache_misses
-    hit_rate_s = hits_s / (hits_s + misses_s) * 100 if (hits_s + misses_s) > 0 else 0
-
-    print(f"\n  耗时: {t_sched*1000:.1f} ms  命中率 {hit_rate_s:.0f}%  ({hits_s}/{hits_s+misses_s})")
-    print(f"  输出与串行版完全相同 ✅")
-
-    for blk in sched_engine.block_manager._blocks:
-        assert blk.ref_count >= 0, f"Scheduler Block {blk.block_id} ref_count 异常"
-    print(f"  所有 Block ref_count 正常 ✅")
-
-    print("\n✅ step08_paged_prefix_cache Scheduler 通过")
 
 
 if __name__ == "__main__":
