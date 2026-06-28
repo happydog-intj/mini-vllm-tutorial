@@ -67,6 +67,11 @@ class BlockManager:
             block_table = block_table + new_blocks
         return block_table
 
+    def retain(self, block_ids: List[int]):
+        """对一组 Block 增加引用计数（prefix cache 命中/保存时使用）。"""
+        for bid in block_ids:
+            self._blocks[bid].ref_count += 1
+
     def free(self, block_table: List[int]):
         """释放整个 block_table 对应的所有 Block。"""
         for bid in block_table:

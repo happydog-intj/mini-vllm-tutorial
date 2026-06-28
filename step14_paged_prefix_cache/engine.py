@@ -73,8 +73,7 @@ class PagedPrefixCacheEngine:
             if h in self._prefix_cache:
                 entry = self._prefix_cache[h]
                 cached_block_ids = list(entry["block_ids"])
-                for bid in cached_block_ids:
-                    self.block_manager._blocks[bid].ref_count += 1
+                self.block_manager.retain(cached_block_ids)
                 self.cache_hits += 1
                 return cached_block_ids, entry["length"], h
         self.cache_misses += 1
@@ -86,8 +85,7 @@ class PagedPrefixCacheEngine:
         h = self._chain_hash(tokens, prev_hash, pos - self.block_size, pos)
         if h not in self._prefix_cache:
             prefix_block_ids = list(block_table[:pos // self.block_size])
-            for bid in prefix_block_ids:
-                self.block_manager._blocks[bid].ref_count += 1
+            self.block_manager.retain(prefix_block_ids)
             self._prefix_cache[h] = {"block_ids": prefix_block_ids, "length": pos}
         return h
 
