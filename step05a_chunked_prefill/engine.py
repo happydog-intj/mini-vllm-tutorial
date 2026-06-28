@@ -51,10 +51,11 @@ class ChunkedPrefillEngine:
             seqs.append(seq)
 
         while scheduler.has_work:
-            prefill_chunk, decode_seqs = scheduler.schedule()
+            prefill_chunk, decode_seq = scheduler.schedule()
 
-            # 每步至多一块 prefill，执行完立刻做 decode，体现分时交替
-            for seq, start, end in prefill_chunk:
+            # 每步至多一块 prefill → 立刻一个 decode，严格分时交替
+            if prefill_chunk:
+                seq, start, end = prefill_chunk[0]
                 chunk = seq.prompt_ids[start:end]
                 logits, seq.past_key_values = self.model(
                     chunk, past_key_values=seq.past_key_values
@@ -64,7 +65,8 @@ class ChunkedPrefillEngine:
                     seq.append_token(torch.argmax(logits[-1]).item())
                     seq.status = SequenceStatus.RUNNING
 
-            for seq in decode_seqs:
+            if decode_seq:
+                seq = decode_seq[0]
                 logits, seq.past_key_values = self.model(
                     seq.get_last_token(), past_key_values=seq.past_key_values
                 )

@@ -72,7 +72,7 @@ class ChunkedScheduler:
         """
         返回：
           prefill_chunk: List[(seq, start, end)]  — 至多 1 个序列的 1 块 prefill
-          decode_seqs:   List[Sequence]
+          decode_seq:    List[Sequence]            — 至多 1 个 decode 序列
         """
         # 移除已完成的
         for s in list(self.running):

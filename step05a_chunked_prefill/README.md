@@ -150,12 +150,16 @@ seq.prefill_offset = end
 `engine.py` 中，prefill 和 decode 的序列各自单独调用一次 `self.model()`：
 
 ```python
-# engine.py — 教学版实现：一块 prefill → 一轮 decode，严格交替
-for seq, start, end in prefill_chunk:        # 至多 1 个序列的 1 块
-    self.model(chunk, ...)                   # forward ①
+# engine.py — 教学版实现：一块 prefill → 一个 decode，严格交替
+prefill_chunk, decode_seq = scheduler.schedule()
 
-for seq in decode_seqs:
-    self.model(seq.get_last_token(), ...)    # forward ②③④...
+if prefill_chunk:
+    seq, start, end = prefill_chunk[0]          # 至多 1 块
+    self.model(chunk, ...)                      # forward ①
+
+if decode_seq:
+    seq = decode_seq[0]                         # 至多 1 个
+    self.model(seq.get_last_token(), ...)       # forward ②
 ```
 
 调度器 `schedule()` 每次只返回**一个**序列的一块 chunk，以及**一个** decode 序列（各自 `break` 后即返回），engine 的 while 循环自然变成严格的「一块 prefill → 一个 decode」交替：
