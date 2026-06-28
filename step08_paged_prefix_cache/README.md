@@ -86,6 +86,44 @@ while pos < prompt_len:
 | 跨请求共享 | ❌ 无 ref_count，无法安全共享 | ✅ ref_count 控制生命周期 |
 | 驱逐支持 | ❌ 永不驱逐 | ✅ ref_count 归零可驱逐 |
 | 增量 prefill | ❌ 全量后缓存 | ✅ 逐 Block 边界缓存 |
+| past_kv 存储 | Python 对象 | Python 对象（仍未托管给 BlockManager） |
+
+### 教学版的剩余局限：past_kv 仍是游离的 Python 对象
+
+step08 的 `_prefix_cache` 里，`block_id` 用于 ref_count 生命周期管理，但 `past_kv` 本身仍是一个普通的 Python/PyTorch tensor，存在 Python 堆内存里，不受 BlockManager 控制：
+
+```python
+prefix_cache[h] = {
+    "block_id": blk[0],    # ← 只用于 ref_count，不是 KV 数据的实际存储位置
+    "past_kv":  past_kv,   # ← 仍是 Python 对象，在 Python 内存里游离
+    "length":   pos,
+}
+```
+
+**真正的生产实现应该是：**
+
+所有 KV Cache 数据统一存储在一个由 BlockManager 管理的全局张量里，`past_kv` 不再是独立对象，而是这块显存的切片：
+
+```python
+# 全局 KV Cache 张量，BlockManager 管理的就是这块物理显存
+kv_pool = torch.zeros(total_blocks, block_size, num_heads, head_dim)
+
+# 写入时：把计算好的 K/V 写入对应的物理 Block
+kv_pool[block_id, slot_in_block] = k_or_v
+
+# 前缀缓存命中时：复用的是 kv_pool 里已写入的那些 Block
+# 不需要复制数据，只需把 block_id 加入新请求的 block_table
+new_request.block_table.extend(cached_block_ids)  # 零拷贝！
+
+# Attention 计算时：FlashAttention kernel 接收 block_table，从 kv_pool 按地址读取
+flash_attn_with_kvcache(Q, kv_pool, block_table=new_request.block_table, ...)
+```
+
+**为什么 step08 还做不到这一点？**
+
+step08 使用的是 `TinyTransformer`，它的接口是 `model(chunk, past_key_values=past_kv)`，没有 `block_table` 的概念。把 `block_table` 真正接入 attention 计算需要 FlashAttention 的 PagedAttention 接口（`flash_attn_with_kvcache` + `block_table` 参数），将在 step10 引入。
+
+到 step10，分页内存管理和前缀缓存的闭环才真正合拢：BlockManager 管理的物理 Block 不再只是元数据，而是 attention kernel 直接读取的显存地址。
 
 ## 运行
 
