@@ -158,13 +158,16 @@ for seq in decode_seqs:
     self.model(seq.get_last_token(), ...)    # forward ②③④...
 ```
 
-调度器 `schedule()` 每次只返回**一个**序列的一块 chunk（`break` 后即返回），engine 的 while 循环自然变成严格的「一块 prefill → 一轮 decode」交替：
+调度器 `schedule()` 每次只返回**一个**序列的一块 chunk，以及**一个** decode 序列（各自 `break` 后即返回），engine 的 while 循环自然变成严格的「一块 prefill → 一个 decode」交替：
 
 ```
-iteration 1: prefill seq_new chunk1 (50 tok) → decode [A, B, C, D]
-iteration 2: prefill seq_new chunk2 (50 tok) → decode [A, B, C, D]
-iteration 3: prefill seq_new chunk3 (50 tok) → decode [A, B, C, D]
-iteration 4: prefill seq_new chunk4 (50 tok) → decode [A, B, C, D, seq_new]
+iteration 1: prefill seq_new chunk1 (50 tok) → decode A
+iteration 2: prefill seq_new chunk2 (50 tok) → decode B
+iteration 3: prefill seq_new chunk3 (50 tok) → decode C
+iteration 4: prefill seq_new chunk4 (50 tok) → decode D
+iteration 5: (prefill done)                  → decode seq_new
+iteration 6:                                 → decode A
+...
 ```
 
 这样分时逻辑一目了然。代价是 decode 序列之间仍各自一次 forward，没有被 batch 合并——**真实 vLLM 的做法**是把所有 prefill chunk token 和所有 decode token 拼成一个 batch，**一次 forward** 处理完：

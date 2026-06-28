@@ -96,8 +96,12 @@ class ChunkedScheduler:
             prefill_chunk.append((seq, start, end))
             break  # ← 只取第一个，保证每步只做一块 prefill
 
-        # 已完成 prefill 的做 decode
-        decode_seqs = [s for s in self.running if s.prefill_done and not s.is_done]
+        # 已完成 prefill 的取第一个做 decode（每步只处理一个）
+        decode_seqs = []
+        for s in self.running:
+            if s.prefill_done and not s.is_done:
+                decode_seqs.append(s)
+                break  # ← 只取第一个
         return prefill_chunk, decode_seqs
 
     @property
