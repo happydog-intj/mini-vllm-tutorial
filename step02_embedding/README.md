@@ -1,4 +1,4 @@
-# step02 — Embedding：向量空间
+# Embedding：数字变向量 — Embedding：向量空间
 
 ## 为什么需要 Embedding？
 

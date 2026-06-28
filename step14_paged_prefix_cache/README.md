@@ -1,4 +1,4 @@
-# step14 — Paged Prefix Cache
+# Paged Prefix Cache — Paged Prefix Cache
 
 ## 阶段性小结
 前面我们讲了Continuous Batching，chunked prefill，paged attention，prefix cache等一系列的优化，每个章节为了简化学习和理解成本，都做了一定的简化，其中一个简化就是kv cache并没有真正的做到全局唯一，且在显存中复用；另外一个简化就是控制单一变量，每章只实现这章要讲的概念，其他章的优化并没有一起串起来，这就导致我们前面的实现还是比较偏demo性能，和实际vllm的实现有较大的差距。本章的目的，就是把前面所有章节的优化全部结合起来，真正做到一个接近生产级的实现。
@@ -12,14 +12,14 @@
 - 未命中时**逐 Block 增量 prefill**，在每个 Block 边界处保存**正确的** KV 快照
 - 释放时 `ref_count--`，归零才真正回收
 
-## step13 的两个核心问题
+## Prefix Caching：相同前缀只算一次 的两个核心问题
 
 Prefix Caching：相同前缀只算一次 的实现能跑通，但有两个根本性缺陷：
 
 **问题1：缓存了错误的 KV 快照**
 
 ```python
-# step13 的做法：prompt 全部跑完后按照block计算hash并缓存
+# Prefix Caching：相同前缀只算一次 的做法：prompt 全部跑完后按照block计算hash并缓存
 for end in range(block_size, prompt_len + 1, block_size):
     h = compute_hash(tokens, end)
     prefix_cache[h] = past_kv   # ← past_kv 含完整 prompt 的信息，不是前 end 个 token！
@@ -31,7 +31,7 @@ for end in range(block_size, prompt_len + 1, block_size):
 
 Prefix Caching：相同前缀只算一次 缓存的是 Python 对象（`past_key_values` tuple），每个请求命中后得到的是对同一对象的引用，没有 `ref_count` 控制生命周期——无法安全地在多请求之间共享并释放。
 
-## step14 的修正：逐 Block 增量 prefill
+## Paged Prefix Cache 的修正：逐 Block 增量 prefill
 
 正确做法是**在 prefill 过程中**，每处理完一个完整 Block 就立即保存快照：
 
@@ -116,7 +116,7 @@ while pos < prompt_len:
 （驱逐时）：           ref_count = 0  ← 才真正回收，放回空闲池
 ```
 
-## step13 vs step14 对比
+## Prefix Caching：相同前缀只算一次 vs Paged Prefix Cache 对比
 
 | 特性 | Prefix Caching：相同前缀只算一次 | Paged Prefix Cache（本章） |
 |------|--------|---------------|
@@ -134,7 +134,7 @@ while pos < prompt_len:
 `model.py` 实现了 `TinyTransformerPaged`，把 `past_key_values` 彻底替换为 `kv_pool + block_table`：
 
 ```python
-# TinyTransformerWithKVCache（step07~step13）：
+# TinyTransformerWithKVCache（单请求 KV Cache~Prefix Caching：相同前缀只算一次）：
 logits, past_kv = model(chunk, past_key_values=past_kv)  # past_kv 是 Python 对象，每步返回
 
 # TinyTransformerPaged（本章）：
@@ -248,7 +248,7 @@ while scheduler.has_work:
 
 Block 生命周期完全由 engine 管理，scheduler 只负责调度，不做任何内存操作。
 
-### 与 step10 Chunked Prefill 的关系
+### 与 Chunked Prefill：切片长 Prompt Chunked Prefill 的关系
 
 `_do_prefill_step` 每次只处理一个 block_size 的 chunk，scheduler 每轮只推进一步——和 Chunked Prefill：切片长 Prompt「1 chunk + 1 decode 交替」的思路完全一致，只是这里 chunk_size = block_size，两个机制统一了。
 

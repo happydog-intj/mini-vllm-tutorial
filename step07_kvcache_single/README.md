@@ -1,4 +1,4 @@
-# step07 — 单请求 KV Cache
+# 单请求 KV Cache — 单请求 KV Cache
 
 ## 为什么需要 KV Cache？
 
@@ -153,18 +153,18 @@ else:
 
 ---
 
-## Attention 代码修改：step05 vs step07
+## Attention 代码修改：朴素自回归推理 vs 单请求 KV Cache
 
 为了支持 KV Cache，Attention 层需要改动三处。对比两步的代码：
 
 ### 改动一：函数签名新增 past_kv 参数
 
 ```python
-# step05 的 MultiHeadAttention.forward：
+# 朴素自回归推理 的 MultiHeadAttention.forward：
 def forward(self, x: Tensor) -> Tensor:
     # 无历史缓存概念，每次从头算
 
-# step07 的 MultiHeadAttentionWithKVCache.forward：
+# 单请求 KV Cache 的 MultiHeadAttentionWithKVCache.forward：
 def forward(
     self,
     x: Tensor,                         # [seq_len, d_model]
@@ -177,11 +177,11 @@ def forward(
 ### 改动二：KV 矩阵的拼接
 
 ```python
-# step05：直接用当前输入的 K/V
+# 朴素自回归推理：直接用当前输入的 K/V
 K_full = K   # [seq_len, heads, d_head]
 V_full = V
 
-# step07：把历史 K/V 和当前新 token 的 K/V 拼接
+# 单请求 KV Cache：把历史 K/V 和当前新 token 的 K/V 拼接
 if past_kv is not None:
     K_past, V_past = past_kv           # 历史：[old_len, heads, d_head]
     K_full = torch.cat([K_past, K], dim=0)   # 拼接 → [old_len+1, heads, d_head]
@@ -198,7 +198,7 @@ else:
 朴素自回归推理 中因果掩码的逻辑很简单——上三角全部屏蔽：
 
 ```python
-# step05：seq_len × seq_len 的掩码，上三角置 -inf
+# 朴素自回归推理：seq_len × seq_len 的掩码，上三角置 -inf
 mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
 scores = scores.masked_fill(mask, float("-inf"))
 ```
@@ -206,7 +206,7 @@ scores = scores.masked_fill(mask, float("-inf"))
 单请求 KV Cache 中需要处理 Prefill 和 Decode 两种情况：
 
 ```python
-# step07：
+# 单请求 KV Cache：
 past_len = total_len - seq_len   # 历史长度（Decode 时 seq_len=1）
                                   # Prefill 时 past_len=0，Decode 时 past_len>0
 
@@ -257,10 +257,10 @@ Q4  →  [  ✓    ✓    ✓    ✓    ✓  ]   ← 新 token 看全部历史 +
 ### 改动四：返回值多了 new_kv
 
 ```python
-# step05：只返回注意力输出
+# 朴素自回归推理：只返回注意力输出
 return self.W_o(concat)
 
-# step07：同时返回更新后的 KV 缓存
+# 单请求 KV Cache：同时返回更新后的 KV 缓存
 return self.W_o(concat), (K_full, V_full)
 # K_full/V_full 包含历史+当前新 token，下一步 Decode 时作为 past_kv 传入
 ```
@@ -357,7 +357,7 @@ K_full = K_cache[:current_pos + 1]   # O(1)，零复制！
 
 每步内存操作从 O(k)（复制前 k 个 token）降为 O(1)（只写 1 个 token）。
 
-### 为什么 step07 还是用 `torch.cat`？
+### 为什么 单请求 KV Cache 还是用 `torch.cat`？
 
 教学目的：`torch.cat` 写法最直观，第一次看代码就能理解「历史 KV 和新 KV 拼在一起」的语义，不需要理解预分配的下标管理逻辑。
 

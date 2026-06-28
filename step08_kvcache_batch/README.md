@@ -1,6 +1,6 @@
-# step08 — 多请求 KV Cache + Static Batching
+# 多请求 KV Cache + Static Batching — 多请求 KV Cache + Static Batching
 
-## 背景：step07 解决了单请求，但生产环境需要同时服务多个用户
+## 背景：单请求 KV Cache 解决了单请求，但生产环境需要同时服务多个用户
 
 单请求 KV Cache 引入了 KV Cache，让单个请求的推理从 O(n²) 降到 O(n)。但实际推理服务面对的是**多个并发用户**：
 

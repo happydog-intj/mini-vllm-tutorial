@@ -1,4 +1,4 @@
-# step03 — Attention：从零理解注意力机制
+# Attention：词语间的关联计算 — Attention：从零理解注意力机制
 
 ## 为什么需要注意力机制？
 

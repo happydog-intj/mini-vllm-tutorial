@@ -1,4 +1,4 @@
-# step01 — Tokenizer：为什么 LLM 用 Token？
+# Tokenizer：文字变数字 — Tokenizer：为什么 LLM 用 Token？
 
 ## 从问题出发：LLM 的输入是什么？
 

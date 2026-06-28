@@ -1,10 +1,10 @@
-# step09 — 连续批处理 Scheduler
+# Continuous Batching 调度器 — 连续批处理 Scheduler
 
 ## 教学目标
 
 理解 Static Batching 的根本缺陷，以及 Continuous Batching 如何解决它。
 
-## step08 的遗留问题
+## 多请求 KV Cache + Static Batching 的遗留问题
 
 多请求 KV Cache + Static Batching 实现了 Static Batching：把多个请求合并成一个 batch，
 利用 GPU 并行矩阵乘法提升吞吐量。

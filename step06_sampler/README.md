@@ -1,4 +1,4 @@
-# step06 — 采样算法：logits → next_token
+# 采样算法：logits → next_token — 采样算法：logits → next_token
 
 ## 为什么需要采样？Greedy 有什么问题？
 

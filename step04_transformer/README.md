@@ -1,4 +1,4 @@
-# step04 — Transformer：完整 Decoder 层
+# Transformer Decoder 层：组装完整计算单元 — Transformer：完整 Decoder 层
 
 ## 教学目标
 
