@@ -2,7 +2,7 @@
 
 ## 为什么需要这一步？连续分配的碎片问题
 
-在 step04 的调度器中，每个请求进入系统时，KV Cache 采用**连续分配**策略：引擎在显存里预留一段连续空间，大小为 `max_new_tokens`（最大生成长度）。这带来了严重的显存浪费。
+在前面的调度器实现中，每个请求进入系统时，KV Cache 采用**连续分配**策略：引擎在显存里预留一段连续空间，大小为 `max_new_tokens`（最大生成长度）。这带来了严重的显存浪费。
 
 用具体数字说明：
 
@@ -100,6 +100,23 @@ block_idx        = token_pos // block_size   # 在 block_table 中的下标
 slot_in_block    = token_pos  % block_size   # 在该 Block 内的偏移
 physical_slot    = block_table[block_idx] * block_size + slot_in_block
 ```
+
+**`translate_slot` 在真实 vLLM 中的对应位置**
+
+`translate_slot` 是 Python 层的教学辅助函数，帮助你建立"逻辑位置 → 物理槽位"的直觉。在真实 vLLM 里，这个翻译**不在 Python 层执行**——Python 只负责把 `block_table`（整型数组）传给 GPU，翻译逻辑内嵌在 CUDA kernel 里：
+
+```
+教学版（本章）：
+  Python: translate_slot(block_table, token_pos) → physical_slot
+  用途：演示翻译过程，建立直觉
+
+真实 vLLM：
+  Python: 把 block_tables tensor 传入 FlashAttention kernel
+  GPU kernel 内部：physical_slot = block_tables[seq_idx][block_idx] * block_size + slot_in_block
+  翻译在 GPU 上完成，Python 端不需要逐 token 查询
+```
+
+生产代码里对应的参数是 FlashAttention 的 `paged_kv_block_table`，或 vLLM 自定义 PagedAttention kernel 里的 `block_tables` tensor——逻辑完全相同，只是计算发生在 GPU kernel 内而非 Python 函数里。
 
 ---
 
