@@ -299,8 +299,36 @@ Prefix Caching：系统提示词场景
 | 驱逐策略 | 无（永不驱逐） | LRU + ref_count |
 | 跨请求共享 | 同进程内字典 | 统一的 Block 池，多请求共享物理 Block |
 | 哈希算法 | 链式 xxhash64 | 链式 xxhash（相同思路） |
+| Attention 计算 | 直接使用 seq.token_ids | 通过 block_table 索引物理 KV Block |
 
 本步省略了 Block 池和驱逐机制，专注于展示**链式 hash + KV 复用**的核心逻辑。
+
+### engine.py 中 Attention 计算的教学简化
+
+`engine.py` 里的 attention 计算直接使用 `seq.token_ids`，没有真正用到 `block_table`：
+
+```python
+# 教学版：attention 使用完整 token_ids，block_table 只参与分配/释放
+logits, seq.past_kv = model(seq.token_ids, past_kv=seq.past_kv)
+```
+
+这是有意识的简化——block 的分配和释放逻辑（`allocate`、`append_slot`、`free`、hash 命中时的 ref_count 管理）都是真实的，但 attention 计算没有把 block_table 真正接入。
+
+**真实 vLLM 的做法**：attention kernel 直接接收 `block_table`，从分散在物理显存中的非连续 Block 里读取 KV Cache：
+
+```python
+# 真实 vLLM：FlashAttention PagedAttention 接口
+flash_attn_with_kvcache(
+    Q,
+    kv_cache,           # 全局 KV Cache 大张量 [total_blocks, block_size, heads, dim]
+    block_table=seq.block_table,  # ← 告诉 kernel 去哪些物理 block 读 K/V
+    ...
+)
+```
+
+`block_table` 中记录的物理 Block ID 直接传入 GPU kernel，kernel 内部按 `block_table[block_idx] * block_size + slot_in_block` 计算物理地址，一次 kernel 调用完成对所有非连续 Block 的 attention 计算。
+
+把 block_table 真正接入 attention 需要 FlashAttention 的 PagedAttention 接口，将在 step09 引入。
 
 ## 下一步
 
