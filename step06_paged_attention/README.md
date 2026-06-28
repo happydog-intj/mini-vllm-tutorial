@@ -48,11 +48,12 @@ PagedAttention 完全照搬这套设计：
 虚拟地址 (进程视角连续)       ←→   逻辑 token 位置 (0, 1, 2, 3, ...)
 页表 page table               ←→   block_table: List[int]
 物理帧号 (PFN)                ←→   物理 Block ID
-缺页中断 → 分配新页帧         ←→   append_slot() → 分配新 Block
-进程退出 → 归还页帧           ←→   free() → 归还 Block
+进程创建 → 分配虚拟地址空间 + 建页表  ←→  请求开始 → allocate() + 建 block_table
+缺页中断 → 按需分配新页帧    ←→   append_slot() → 按需分配新 Block
+进程退出 → 归还页帧          ←→   free() → 归还 Block
 ```
 
-关键洞察：**Attention 计算只需要"逻辑位置 → 物理槽位"的映射**，不需要 KV Cache 在显存里物理连续。只要在计算时查一下 block_table 做地址翻译，就能让不连续的物理 Block 对上下游呈现出"连续序列"的接口。
+两者的核心思想完全相同：**上层（进程/模型）看到的是连续的地址空间，底层实际存储可以是分散的物理块，中间用一张映射表（页表/block_table）做翻译。**
 
 ---
 

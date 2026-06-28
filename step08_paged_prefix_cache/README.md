@@ -57,6 +57,21 @@ while pos < prompt_len:
 
 此时 `past_kv` 只包含 `tokens[0:pos]` 的 KV，是真正意义上的"前 pos 个 token 的缓存"。
 
+### 与 OS 虚拟内存的完整类比
+
+step08 的设计和 OS 内存管理高度对应：
+
+| 操作系统 | step08 KV Cache |
+|---------|----------------|
+| 进程创建 → 分配虚拟地址空间 + 建页表 | 请求开始 → allocate() + 建 block_table |
+| 页表：虚拟页 → 物理页帧 | block_table：逻辑 token 位置 → 物理 Block ID |
+| 进程运行 → 按需写入物理页 | prefill/decode → 按顺序写入 kv_pool |
+| 进程退出 → 归还页帧 | 请求结束 → free(block_table) |
+| `fork()` 后父子进程共享物理页（CoW）| prefix cache 命中 → 多请求共享同一物理 Block |
+| 写时复制（CoW）：写操作才分配新页 | prefix cache 只读共享：新 token 才分配新 Block |
+
+最后一行的 CoW 类比最精妙：OS 中 `fork()` 后父子进程的页表指向同一物理页，只要没有写操作就不复制（`ref_count` 控制）；step08 中多个请求命中同一前缀时，`block_table` 指向同一物理 Block，只要不写新 token 就不分配新 Block——`ref_count++` 即可，物理显存零拷贝。
+
 ### 顺带实现了 Chunked Prefill
 
 逐 Block 增量 prefill 的循环结构和 [step05a 的 Chunked Prefill](../step05a_chunked_prefill/README.md) 完全相同——都是把长 prompt 切成小块依次处理：
