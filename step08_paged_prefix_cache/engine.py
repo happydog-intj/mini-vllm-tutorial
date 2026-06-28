@@ -14,7 +14,7 @@ import torch
 import xxhash
 from torch import Tensor
 from typing import List, Tuple, Dict
-from model_paged import TinyTransformerPaged
+from model import TinyTransformerPaged
 from block_manager import BlockManager
 from scheduler import Sequence, PagedScheduler, SequenceStatus
 
