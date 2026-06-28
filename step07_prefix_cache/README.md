@@ -374,4 +374,6 @@ def generate_batch(self, requests):
 
 ## 下一步
 
-前缀缓存解决了"重复 prompt 的重复计算"问题，但每个请求仍然是串行处理的。下一步将引入**连续批处理（Continuous Batching）**：如何在请求到达时间不同的情况下，把多个处于不同阶段（有的在 Prefill，有的在 Decode）的请求动态合并到同一个批次里，进一步提升整体吞吐量。
+step07 的实现有两个根本缺陷：缓存了错误位置的 KV 快照（含整个 prompt 信息而非前 N 个 token），以及 `past_kv` 是游离的 Python 对象，无法跨请求共享物理显存。
+
+step08 将结合 step06 的分页内存管理，修正这两个问题：逐 Block 增量 prefill 保存正确快照，`past_kv` 彻底消失，KV 数据全部存入由 BlockManager 管理的 `kv_pool`，prefix cache 命中时只需把已缓存的 `block_id` 加入 `block_table`——零拷贝复用。
