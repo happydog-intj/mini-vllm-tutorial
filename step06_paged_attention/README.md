@@ -219,6 +219,37 @@ block_size 越小，尾部浪费越少，但管理开销（Block 数量、block_
 
 ---
 
+## engine.py 中 Attention 计算的教学简化
+
+`engine.py` 里 block 的分配和释放逻辑是真实的，但 attention 计算直接使用 `seq.token_ids`，没有真正用到 `block_table`：
+
+```python
+# 教学版：block_table 只参与分配/释放，attention 仍用完整 token_ids
+logits, seq.past_key_values = self.model(
+    torch.tensor(seq.token_ids), past_key_values=seq.past_key_values
+)
+```
+
+**真实 vLLM 的做法**：attention kernel 直接接收 `block_table`，从分散在物理显存中的非连续 Block 里读取 KV Cache：
+
+```python
+# 真实 vLLM：FlashAttention PagedAttention 接口
+flash_attn_with_kvcache(
+    Q,
+    kv_cache,                      # 全局 KV Cache [total_blocks, block_size, heads, dim]
+    block_table=seq.block_table,   # ← 告诉 kernel 去哪些物理 block 读 K/V
+    ...
+)
+```
+
+`block_table` 中的物理 Block ID 直接传入 GPU kernel，kernel 内部按
+`block_table[block_idx] * block_size + slot_in_block` 计算物理地址，
+一次 kernel 调用完成对所有非连续 Block 的 attention 计算。
+
+把 block_table 真正接入 attention 需要 FlashAttention 的 PagedAttention 接口，将在 step09 引入。
+
+---
+
 ## 代码结构
 
 ```
