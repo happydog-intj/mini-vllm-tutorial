@@ -2,14 +2,14 @@
 step08: Paged Prefix Cache 演示
 
 验证策略：
-  - V1（PagedPrefixCacheEngine）：block_id 做 ref_count，past_kv 仍是 Python 对象
-  - V2（PagedPrefixCacheEngineV2）：past_kv 彻底消失，KV 全存 kv_pool，block_table 零拷贝复用
-  - 两个版本的两轮（冷热）输出完全相同
+  - 第一轮：冷启动，全部 miss，正常 prefill
+  - 第二轮：相同请求，命中缓存，跳过前缀 prefill
+  - 两轮输出完全相同（缓存只是优化，不改变数学结果）
 """
 
 import time
 import torch
-from engine import NoPrefixCacheEngine, PagedPrefixCacheEngine, PagedPrefixCacheEngineV2
+from engine import NoPrefixCacheEngine, PagedPrefixCacheEngineV2
 
 SYSTEM_PROMPT_LEN = 32   # 共享前缀长度（模拟 system prompt）
 USER_QUESTION_LEN = 8    # 每个请求独有的后缀
@@ -34,12 +34,12 @@ def main():
     requests = make_requests(NUM_REQUESTS, SYSTEM_PROMPT_LEN, USER_QUESTION_LEN)
 
     print("=" * 60)
-    print("Paged Prefix Cache：Block 粒度前缀复用")
+    print("Paged Prefix Cache：Block 粒度前缀复用（V2）")
     print("=" * 60)
     print(f"请求数: {NUM_REQUESTS}，共享前缀: {SYSTEM_PROMPT_LEN} tokens，"
           f"独有后缀: {USER_QUESTION_LEN} tokens，block_size: {BLOCK_SIZE}")
 
-    engine = PagedPrefixCacheEngine(block_size=BLOCK_SIZE, total_blocks=64)
+    engine = PagedPrefixCacheEngineV2(block_size=BLOCK_SIZE, total_blocks=128)
 
     # ── 第一轮：冷启动，全部 miss ──
     t0 = time.perf_counter()
@@ -68,6 +68,8 @@ def main():
     print(f"\n  第一轮（冷启动）: {t_cold*1000:.1f} ms  命中率 {hit_rate_1:.0f}%  ({hits_1}/{hits_1+misses_1})")
     print(f"  第二轮（缓存热）: {t_warm*1000:.1f} ms  命中率 {hit_rate_2:.0f}%  ({hits_2}/{hits_2+misses_2})")
     print(f"\n  两轮输出完全相同 ✅（缓存只是优化，不改变结果）")
+    print(f"  KV 数据全部存储在 kv_pool 中，past_kv 彻底消失 ✅")
+    print(f"  prefix cache 命中 = block_table 复用，零拷贝 ✅")
 
     assert hits_2 > 0, "第二轮应有缓存命中"
 
@@ -76,7 +78,7 @@ def main():
         assert blk.ref_count >= 0, f"Block {blk.block_id} ref_count 异常: {blk.ref_count}"
     print(f"  所有 Block ref_count 正常 ✅")
 
-    # ── 对比无缓存引擎的耗时（仅耗时对比，不比较输出） ──
+    # ── 对比无缓存引擎的耗时 ──
     print("\n" + "=" * 60)
     print("耗时对比")
     print("=" * 60)
@@ -89,48 +91,6 @@ def main():
     print(f"  有前缀缓存（第二轮）: {t_warm*1000:.1f} ms  ← 共享前缀只算了 1 次")
 
     print("\n✅ step08_paged_prefix_cache 通过")
-
-    # ── V2：KV 全存 kv_pool，past_kv 彻底消失 ──
-    print("\n" + "=" * 60)
-    print("V2：TinyTransformerPaged（kv_pool 真正托管 KV 数据）")
-    print("=" * 60)
-
-    engine_v2 = PagedPrefixCacheEngineV2(block_size=BLOCK_SIZE, total_blocks=128)
-
-    # 第一轮（冷）
-    t0 = time.perf_counter()
-    results_v2_cold = engine_v2.generate_batch(requests)
-    t_v2_cold = time.perf_counter() - t0
-    hits_v2_1 = engine_v2.cache_hits
-    misses_v2_1 = engine_v2.cache_misses
-
-    # 第二轮（热）
-    engine_v2.cache_hits = 0
-    engine_v2.cache_misses = 0
-    t0 = time.perf_counter()
-    results_v2_warm = engine_v2.generate_batch(requests)
-    t_v2_warm = time.perf_counter() - t0
-    hits_v2_2 = engine_v2.cache_hits
-
-    # 验证两轮输出相同
-    for i, (r_cold, r_warm) in enumerate(zip(results_v2_cold, results_v2_warm)):
-        assert torch.equal(r_cold, r_warm), f"V2 请求 {i} 冷热输出不一致！"
-
-    hit_rate_v2_1 = hits_v2_1 / (hits_v2_1 + misses_v2_1) * 100 if (hits_v2_1 + misses_v2_1) > 0 else 0
-    hit_rate_v2_2 = hits_v2_2 / (hits_v2_2 + (engine_v2.cache_misses)) * 100 if (hits_v2_2 + engine_v2.cache_misses) > 0 else 0
-
-    print(f"\n  第一轮（冷启动）: {t_v2_cold*1000:.1f} ms  命中率 {hit_rate_v2_1:.0f}%")
-    print(f"  第二轮（缓存热）: {t_v2_warm*1000:.1f} ms  命中率 {hits_v2_2}/{hits_v2_2+engine_v2.cache_misses}")
-    print(f"  两轮输出完全相同 ✅")
-    print(f"\n  KV 数据全部存储在 kv_pool 中，past_kv 彻底消失 ✅")
-    print(f"  prefix cache 命中 = block_table 复用，零拷贝 ✅")
-
-    # Block ref_count 验证
-    for blk in engine_v2.block_manager._blocks:
-        assert blk.ref_count >= 0, f"V2 Block {blk.block_id} ref_count 异常"
-    print(f"  所有 Block ref_count 正常 ✅")
-
-    print("\n✅ step08_paged_prefix_cache V2 通过")
 
 
 if __name__ == "__main__":
