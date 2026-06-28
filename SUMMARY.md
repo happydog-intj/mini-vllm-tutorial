@@ -31,14 +31,14 @@ A100 80GB，模型权重占 1.2GB，剩余约 78GB：
 ```
 设太小 → GPU 利用率低，吞吐量上不去
 设太大 → 每个请求等待的其他请求变多，平均延迟上升
-         且 KV Cache 可能不够，触发频繁 Preemption（见 step05b）
+         且 KV Cache 可能不够，触发频繁 Preemption（见 step11）
 
 经验值：先用 max_num_seqs = 总KV槽位 / 平均序列长度 作为上限
 ```
 
 ### 3. chunk_size（Chunked Prefill）
 
-控制每步最多处理的 prefill token 数（step05a）。
+控制每步最多处理的 prefill token 数（step10）。
 
 ```
 chunk_size 小（如 256）：
@@ -55,7 +55,7 @@ chunk_size 大（如 2048）：
 
 ### 4. block_size（PagedAttention）
 
-KV Cache 的分配粒度（step06）。
+KV Cache 的分配粒度（step12）。
 
 ```
 block_size 小（如 8）：
@@ -78,7 +78,7 @@ block_size 大（如 32）：
 | INT8 | 1字节/参数 | 更快 | 小 | 显存紧张时 |
 | INT4 | 0.5字节/参数 | 最快 | 中等 | 极限压缩 |
 
-本教程 step09 起使用 BF16，是生产推理的标准选择。
+本教程 step15 起使用 BF16，是生产推理的标准选择。
 
 ---
 
@@ -122,7 +122,7 @@ GPU 利用率（Compute Utilization）
   持续低（< 30%）：请求量不足 或 调度效率低
 
 GPU 显存利用率
-  KV Cache 占用：应尽量高（步骤 step06 的目标是 ~96%）
+  KV Cache 占用：应尽量高（步骤 step12 的目标是 ~96%）
   持续低（< 50%）：max_num_seqs 设置过小，或请求量不足
 
 KV Cache 命中率（Prefix Cache Hit Rate）
@@ -131,7 +131,7 @@ KV Cache 命中率（Prefix Cache Hit Rate）
   接近 0：无重复前缀，不适合前缀缓存
 
 Preemption 次数
-  频繁 Preemption（step05b）说明 KV Cache 不够用
+  频繁 Preemption（step11）说明 KV Cache 不够用
   需要减少 max_num_seqs 或增加显存
 ```
 
@@ -157,22 +157,22 @@ Scheduling Delay = 请求等待进入 running 队列的时间
 ```
 TTFT 高？
   ├─ prompt 很长（> 1024 token）？
-  │    → 减小 chunk_size，让 decode 不被阻塞（step05a）
-  │    → 开启 Prefix Caching，相同前缀复用（step07）
+  │    → 减小 chunk_size，让 decode 不被阻塞（step10）
+  │    → 开启 Prefix Caching，相同前缀复用（step13）
   └─ prefill 本身慢？
-       → 换更快的 GPU，或开启 FlashAttention（step10）
+       → 换更快的 GPU，或开启 FlashAttention（step16）
 
 TPOT 高（生成慢）？
   ├─ GPU 利用率低（< 60%）？
-  │    → 增大 max_num_seqs，提高并发（step04）
-  │    → 检查 Preemption 是否频繁（step05b）
+  │    → 增大 max_num_seqs，提高并发（step09）
+  │    → 检查 Preemption 是否频繁（step11）
   └─ GPU 利用率高（> 90%）但仍慢？
-       → Decode 已到显存带宽上限，需要更好的 GPU 或 Tensor Parallelism（step12）
+       → Decode 已到显存带宽上限，需要更好的 GPU 或 Tensor Parallelism（step18）
 
 Throughput 低？
   ├─ KV Cache 利用率低（< 60%）？
   │    → 增大 max_num_seqs
-  │    → 检查 PagedAttention 配置（step06）
+  │    → 检查 PagedAttention 配置（step12）
   └─ 队列持续增长？
        → 系统过载，需要扩容（更多 GPU 或 Tensor/Pipeline Parallelism）
 
@@ -188,21 +188,21 @@ Preemption 频繁？
 
 | 优化手段 | 对应步骤 | 主要收益 | 代价 |
 |---------|---------|---------|------|
-| KV Cache | step03a | Decode 速度提升 10-100× | 显存占用增加 |
-| Continuous Batching | step04 | 吞吐量提升 2-5× | 实现复杂度 |
-| Chunked Prefill | step05a | TPOT 稳定，TTFT 改善 | 长 prompt TTFT 微增 |
-| Preemption | step05b | 避免 OOM，稳定性提升 | 被抢占请求需重新 prefill |
-| PagedAttention | step06 | 显存利用率 ~18% → ~96% | block_table 管理开销 |
-| Prefix Caching | step07 | 相同前缀节省 50-90% prefill | 显存常驻，需要 LRU 管理 |
-| FlashAttention | step10 | 注意力计算速度 2-4×，显存大幅减少 | 需要 NVIDIA GPU |
-| CUDA Graph | step11 | Decode 延迟降低 30-60% | 只对 Decode 有效 |
-| Tensor Parallelism | step12 | 线性扩展吞吐，支持更大模型 | 需要多 GPU + NVLink |
+| KV Cache | step07 | Decode 速度提升 10-100× | 显存占用增加 |
+| Continuous Batching | step09 | 吞吐量提升 2-5× | 实现复杂度 |
+| Chunked Prefill | step10 | TPOT 稳定，TTFT 改善 | 长 prompt TTFT 微增 |
+| Preemption | step11 | 避免 OOM，稳定性提升 | 被抢占请求需重新 prefill |
+| PagedAttention | step12 | 显存利用率 ~18% → ~96% | block_table 管理开销 |
+| Prefix Caching | step13 | 相同前缀节省 50-90% prefill | 显存常驻，需要 LRU 管理 |
+| FlashAttention | step16 | 注意力计算速度 2-4×，显存大幅减少 | 需要 NVIDIA GPU |
+| CUDA Graph | step17 | Decode 延迟降低 30-60% | 只对 Decode 有效 |
+| Tensor Parallelism | step18 | 线性扩展吞吐，支持更大模型 | 需要多 GPU + NVLink |
 
 ### 实际优化流程
 
 ```
 第一步：建立基线
-  python step13_benchmark/run.py
+  python step19_benchmark/run.py
   记录：TTFT P50/P95/P99，TPOT，Throughput，GPU利用率，显存使用
 
 第二步：确定主要瓶颈
@@ -229,27 +229,27 @@ Preemption 频繁？
 用户请求
     │
     ▼
-HTTP 服务（step14）
+HTTP 服务（step20）
 FastAPI + SSE 流式输出 + asyncio 异步队列
     │
     ▼
-调度器（step04 + step05a + step05b）
+调度器（step09 + step10 + step11）
 Continuous Batching → Chunked Prefill → Preemption
     │
     ▼
-内存管理（step06 + step07）
+内存管理（step12 + step13）
 PagedAttention → Prefix Caching
     │
     ▼
-模型推理（step09 + step10 + step11 + step12）
+模型推理（step15 + step16 + step17 + step18）
 Qwen3-0.6B → FlashAttention → CUDA Graph → Tensor Parallelism
     │
     ▼
-基础组件（step00a~step03a）
+基础组件（step01~step07）
 Tokenizer → Embedding → Attention → Transformer → KV Cache
     │
     ▼
-指标采集（step13）
+指标采集（step19）
 TTFT / TPOT / Throughput / GPU 利用率 / KV 命中率
 ```
 
