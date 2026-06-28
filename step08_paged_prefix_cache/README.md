@@ -1,5 +1,8 @@
 # step08 — Paged Prefix Cache
 
+## 阶段性小结
+前面我们讲了Continuous Batching，chunked prefill，paged attention，prefix cache等一系列的优化，每个章节为了简化学习和理解成本，都做了一定的简化，其中一个简化就是kv cache并没有真正的做到全局唯一，且在显存中复用；另外一个简化就是控制单一变量，每章只实现这章要讲的概念，其他章的优化并没有一起串起来，这就导致我们前面的实现还是比较偏demo性能，和实际vllm的实现有较大的差距。本章的目的，就是把前面所有章节的优化全部结合起来，真正做到一个接近生产级的实现。
+
 ## 教学目标
 
 把 [step06 的分页内存管理](../step06_paged_attention/README.md) 和 [step07 的前缀缓存](../step07_prefix_cache/README.md) 结合起来，实现正确的、Block 粒度的前缀缓存：
@@ -167,6 +170,69 @@ block_table = cached_block_ids + new_block_table
 # model 直接用 block_table 读取已缓存的 KV
 logits = model(chunk, block_table=block_table, start_pos=cached_len)
 ```
+
+## Scheduler：Continuous Batching + Prefix Cache
+
+step08 还实现了一个基于 `PagedScheduler` 的批处理引擎（`PagedPrefixCacheSchedulerEngine`），把分页内存管理、前缀缓存和 Continuous Batching 三者结合在一起。
+
+### 核心数据结构：Sequence
+
+```python
+class Sequence:
+    prompt_ids: Tensor
+    block_table: List[int]   # 替代 past_key_values，指向 kv_pool 中的物理 Block
+    prefill_offset: int      # 已完成 prefill 的 token 数（支持增量 prefill）
+    status: SequenceStatus   # WAITING → PREFILLING → RUNNING → FINISHED
+```
+
+`block_table` 是 Sequence 持有的唯一 KV 状态——不是 Python 张量，而是一组物理 Block ID。
+
+### PagedScheduler 调度循环
+
+```python
+def schedule() -> (prefill_seqs, decode_seqs):
+    # 1. 把已完成的请求移出 running（block 释放由 engine 统一处理）
+    # 2. 从 waiting 补充新请求到 running，直到满 max_running
+    # 3. 分类：prefill_done=False → prefill_seqs；prefill_done=True → decode_seqs
+```
+
+每轮循环中 prefill 和 decode 序列**同时存在于 running 队列**，GPU 不会空转等待。
+
+### Engine 执行逻辑
+
+```python
+while scheduler.has_work:
+    prefill_seqs, decode_seqs = scheduler.schedule()
+
+    for seq in prefill_seqs:
+        _do_prefill_step(seq)   # 处理一个 block_size 的 chunk
+        # 首次进入时：lookup prefix cache → 分配 block_table
+
+    for seq in decode_seqs:
+        _do_decode_step(seq)    # 用 block_table 读 kv_pool，生成下一 token
+
+    # 释放本轮刚完成的请求（ref_count-- + free new_blocks）
+    for seq in finished_seqs:
+        _free_seq(seq)
+```
+
+Block 生命周期完全由 engine 管理，scheduler 只负责调度，不做任何内存操作。
+
+### 与 step05a Chunked Prefill 的关系
+
+`_do_prefill_step` 每次只处理一个 block_size 的 chunk，scheduler 每轮只推进一步——和 step05a「1 chunk + 1 decode 交替」的思路完全一致，只是这里 chunk_size = block_size，两个机制统一了。
+
+## 代码结构
+
+| 文件 | 说明 |
+|------|------|
+| `model_paged.py` | `TinyTransformerPaged`：kv_pool + block_table 替代 past_key_values |
+| `block_manager.py` | `BlockManager`：物理 Block 分配/释放/ref_count |
+| `engine_baseline.py` | `NoPrefixCacheEngine`：对照组，无 prefix cache |
+| `engine_v2.py` | `PagedPrefixCacheEngineV2`（串行）+ `PagedPrefixCacheSchedulerEngine`（批处理） |
+| `engine.py` | 统一 re-export 入口 |
+| `scheduler.py` | `Sequence`（block_table 版）+ `PagedScheduler` |
+| `run.py` | 测试：冷/热两轮串行验证 + scheduler 引擎与串行版输出对比 |
 
 ## 运行
 
