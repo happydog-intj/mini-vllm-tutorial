@@ -150,26 +150,31 @@ seq.prefill_offset = end
 `engine.py` 中，prefill 和 decode 的序列各自单独调用一次 `self.model()`：
 
 ```python
-# engine.py — 教学版实现
-for seq, start, end in prefill_chunks:
-    logits, seq.past_key_values = self.model(chunk, ...)   # 独立 forward ①
+# engine.py — 教学版实现：一块 prefill → 一轮 decode，严格交替
+for seq, start, end in prefill_chunk:        # 至多 1 个序列的 1 块
+    self.model(chunk, ...)                   # forward ①
 
 for seq in decode_seqs:
-    logits, seq.past_key_values = self.model(seq.get_last_token(), ...)  # 独立 forward ②
+    self.model(seq.get_last_token(), ...)    # forward ②③④...
 ```
 
-如果有 1 个 prefill chunk + 8 个 decode 序列，这里会发起 **9 次独立的 GPU forward pass**，GPU 的矩阵乘法没有被 batch 利用，吞吐量与串行处理相同。
-
-**真实 vLLM 的做法**：把 prefill chunk 的所有 token 和全部 decode token 拼成一个序列，**一次 forward** 处理完：
+调度器 `schedule()` 每次只返回**一个**序列的一块 chunk（`break` 后即返回），engine 的 while 循环自然变成严格的「一块 prefill → 一轮 decode」交替：
 
 ```
-prefill chunk（512 tok）+ decode_A（1 tok）+ ... + decode_H（1 tok）
-= [520 tokens] → 一次 forward pass，一次矩阵乘法
+iteration 1: prefill seq_new chunk1 (50 tok) → decode [A, B, C, D]
+iteration 2: prefill seq_new chunk2 (50 tok) → decode [A, B, C, D]
+iteration 3: prefill seq_new chunk3 (50 tok) → decode [A, B, C, D]
+iteration 4: prefill seq_new chunk4 (50 tok) → decode [A, B, C, D, seq_new]
 ```
 
-各序列的 token 虽然拼在一起，但注意力计算仍彼此独立——这正是 step09 FlashAttention varlen 接口（`cu_seqlens`）的用途：用偏移量数组告诉 GPU 每个序列的边界，在一次 kernel 调用内完成所有序列的独立注意力计算。
+这样分时逻辑一目了然。代价是 decode 序列之间仍各自一次 forward，没有被 batch 合并——**真实 vLLM 的做法**是把所有 prefill chunk token 和所有 decode token 拼成一个 batch，**一次 forward** 处理完：
 
-本章教学版保留逐序列 forward 的写法，是为了让调度逻辑（`prefill_offset`、`chunk_size`、状态机）清晰可读，不被 batch 拼接的下标管理逻辑干扰。
+```
+[seq_new_chunk(50) | decode_A(1) | decode_B(1) | decode_C(1) | decode_D(1)]
+→ 一次 forward，一次矩阵乘法，GPU 利用率最高
+```
+
+这需要 FlashAttention varlen 接口（`cu_seqlens`）在一次 kernel 内处理不同长度的序列，将在 step09 引入。
 
 ### 关键参数
 

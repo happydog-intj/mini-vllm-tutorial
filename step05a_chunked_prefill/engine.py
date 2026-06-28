@@ -51,9 +51,10 @@ class ChunkedPrefillEngine:
             seqs.append(seq)
 
         while scheduler.has_work:
-            prefill_chunks, decode_seqs = scheduler.schedule()
+            prefill_chunk, decode_seqs = scheduler.schedule()
 
-            for seq, start, end in prefill_chunks:
+            # 每步至多一块 prefill，执行完立刻做 decode，体现分时交替
+            for seq, start, end in prefill_chunk:
                 chunk = seq.prompt_ids[start:end]
                 logits, seq.past_key_values = self.model(
                     chunk, past_key_values=seq.past_key_values

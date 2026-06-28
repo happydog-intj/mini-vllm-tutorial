@@ -54,8 +54,9 @@ class ChunkedScheduler:
     """
     支持 Chunked Prefill 的调度器。
 
-    长 prompt 每步只处理 chunk_size 个 token，
-    与 decode 请求混合调度，不阻塞 decode。
+    每次 schedule() 只返回一个序列的一块 prefill，
+    engine 循环自然变成「一块 prefill → 一轮 decode」严格交替，
+    直观展示分时执行的逻辑。
     """
 
     def __init__(self, max_running: int = 8, chunk_size: int = 50):
@@ -70,8 +71,8 @@ class ChunkedScheduler:
     def schedule(self) -> Tuple[List[Tuple], List[Sequence]]:
         """
         返回：
-          prefill_chunks: List[(seq, start, end)]
-          decode_seqs:    List[Sequence]
+          prefill_chunk: List[(seq, start, end)]  — 至多 1 个序列的 1 块 prefill
+          decode_seqs:   List[Sequence]
         """
         # 移除已完成的
         for s in list(self.running):
@@ -85,22 +86,19 @@ class ChunkedScheduler:
             seq.status = SequenceStatus.PREFILLING
             self.running.append(seq)
 
-        # 分配 prefill chunks
-        prefill_chunks = []
-        remaining = self.chunk_size
+        # 每次只取一个待 prefill 的序列，返回它的下一块 chunk
+        prefill_chunk = []
         for seq in self.running:
             if seq.prefill_done:
                 continue
             start = seq.prefill_offset
-            end = min(start + remaining, len(seq.prompt_ids))
-            prefill_chunks.append((seq, start, end))
-            remaining -= (end - start)
-            if remaining <= 0:
-                break
+            end = min(start + self.chunk_size, len(seq.prompt_ids))
+            prefill_chunk.append((seq, start, end))
+            break  # ← 只取第一个，保证每步只做一块 prefill
 
         # 已完成 prefill 的做 decode
         decode_seqs = [s for s in self.running if s.prefill_done and not s.is_done]
-        return prefill_chunks, decode_seqs
+        return prefill_chunk, decode_seqs
 
     @property
     def has_work(self) -> bool:
