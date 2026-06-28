@@ -1,4 +1,4 @@
-# Step 10: CUDA Graph — 消除 Decode 阶段的调度开销
+# Step 11: CUDA Graph — 消除 Decode 阶段的调度开销
 
 ## 本节目标
 
@@ -208,4 +208,4 @@ python run.py
 
 ## 下一步
 
-到这一步，我们已经优化了 decode 阶段的调度延迟。下一步（step11）将引入 **Tensor Parallelism**：把模型权重切分到多张 GPU 上，通过列并行与行并行让单卡装不下的大模型也能高效推理。
+到这一步，我们已经优化了 decode 阶段的调度延迟。下一步（step12）将引入 **Tensor Parallelism**：把模型权重切分到多张 GPU 上，通过列并行与行并行让单卡装不下的大模型也能高效推理。

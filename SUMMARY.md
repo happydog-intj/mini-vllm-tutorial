@@ -78,7 +78,7 @@ block_size 大（如 32）：
 | INT8 | 1字节/参数 | 更快 | 小 | 显存紧张时 |
 | INT4 | 0.5字节/参数 | 最快 | 中等 | 极限压缩 |
 
-本教程 step08 起使用 BF16，是生产推理的标准选择。
+本教程 step09 起使用 BF16，是生产推理的标准选择。
 
 ---
 
@@ -160,14 +160,14 @@ TTFT 高？
   │    → 减小 chunk_size，让 decode 不被阻塞（step05a）
   │    → 开启 Prefix Caching，相同前缀复用（step07）
   └─ prefill 本身慢？
-       → 换更快的 GPU，或开启 FlashAttention（step09）
+       → 换更快的 GPU，或开启 FlashAttention（step10）
 
 TPOT 高（生成慢）？
   ├─ GPU 利用率低（< 60%）？
   │    → 增大 max_num_seqs，提高并发（step04）
   │    → 检查 Preemption 是否频繁（step05b）
   └─ GPU 利用率高（> 90%）但仍慢？
-       → Decode 已到显存带宽上限，需要更好的 GPU 或 Tensor Parallelism（step11）
+       → Decode 已到显存带宽上限，需要更好的 GPU 或 Tensor Parallelism（step12）
 
 Throughput 低？
   ├─ KV Cache 利用率低（< 60%）？
@@ -194,15 +194,15 @@ Preemption 频繁？
 | Preemption | step05b | 避免 OOM，稳定性提升 | 被抢占请求需重新 prefill |
 | PagedAttention | step06 | 显存利用率 ~18% → ~96% | block_table 管理开销 |
 | Prefix Caching | step07 | 相同前缀节省 50-90% prefill | 显存常驻，需要 LRU 管理 |
-| FlashAttention | step09 | 注意力计算速度 2-4×，显存大幅减少 | 需要 NVIDIA GPU |
-| CUDA Graph | step10 | Decode 延迟降低 30-60% | 只对 Decode 有效 |
-| Tensor Parallelism | step11 | 线性扩展吞吐，支持更大模型 | 需要多 GPU + NVLink |
+| FlashAttention | step10 | 注意力计算速度 2-4×，显存大幅减少 | 需要 NVIDIA GPU |
+| CUDA Graph | step11 | Decode 延迟降低 30-60% | 只对 Decode 有效 |
+| Tensor Parallelism | step12 | 线性扩展吞吐，支持更大模型 | 需要多 GPU + NVLink |
 
 ### 实际优化流程
 
 ```
 第一步：建立基线
-  python step12_benchmark/run.py
+  python step13_benchmark/run.py
   记录：TTFT P50/P95/P99，TPOT，Throughput，GPU利用率，显存使用
 
 第二步：确定主要瓶颈
@@ -229,7 +229,7 @@ Preemption 频繁？
 用户请求
     │
     ▼
-HTTP 服务（step13）
+HTTP 服务（step14）
 FastAPI + SSE 流式输出 + asyncio 异步队列
     │
     ▼
@@ -241,7 +241,7 @@ Continuous Batching → Chunked Prefill → Preemption
 PagedAttention → Prefix Caching
     │
     ▼
-模型推理（step08 + step09 + step10 + step11）
+模型推理（step09 + step10 + step11 + step12）
 Qwen3-0.6B → FlashAttention → CUDA Graph → Tensor Parallelism
     │
     ▼
@@ -249,7 +249,7 @@ Qwen3-0.6B → FlashAttention → CUDA Graph → Tensor Parallelism
 Tokenizer → Embedding → Attention → Transformer → KV Cache
     │
     ▼
-指标采集（step12）
+指标采集（step13）
 TTFT / TPOT / Throughput / GPU 利用率 / KV 命中率
 ```
 

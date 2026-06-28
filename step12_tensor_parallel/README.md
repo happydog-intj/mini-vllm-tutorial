@@ -1,4 +1,4 @@
-# Step 11: Tensor Parallelism — 列并行与行并行
+# Step 12: Tensor Parallelism — 列并行与行并行
 
 ## 为什么需要 Tensor Parallelism
 
@@ -211,4 +211,4 @@ torchrun --nproc_per_node=2 run_dist.py
 
 ## 下一步
 
-本步骤实现了单层的张量并行组件。下一步（step12）将引入 **Benchmark**：用量化的指标（吞吐量、延迟、首 token 时间）评测各项优化的实际效果，建立性能基线。
+本步骤实现了单层的张量并行组件。下一步（step13）将引入 **Benchmark**：用量化的指标（吞吐量、延迟、首 token 时间）评测各项优化的实际效果，建立性能基线。

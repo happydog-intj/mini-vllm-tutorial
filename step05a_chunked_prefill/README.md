@@ -141,7 +141,7 @@ logits, seq.past_kv = model(chunk, past_kv=seq.past_kv)  # 增量 prefill
 seq.prefill_offset = end
 ```
 
-注意：增量 prefill 依赖 KV Cache——第二块 chunk 处理时，
+>> 注意：增量 prefill 依赖 KV Cache——第二块 chunk 处理时，
 第一块 chunk 的 K/V 已经存在 `past_kv` 里，不需要重算。
 这和 Decode 阶段复用 KV Cache 的机制完全相同。
 
@@ -197,7 +197,7 @@ GPU 的矩阵乘法有固定的 kernel 启动开销（约 0.05ms/次）。decode
 
 **为什么需要 FlashAttention varlen？**
 
-各序列虽然 token 拼在一起，但注意力计算必须**各自独立**（prefill chunk 只能看自己的 token，decode_A 只能看自己的历史 KV）。FlashAttention 的 varlen 接口用 `cu_seqlens` 偏移量数组标记每个序列的边界，在一次 kernel 调用内完成所有序列的独立注意力计算，将在 step09 详细介绍。
+各序列虽然 token 拼在一起，但注意力计算必须**各自独立**（prefill chunk 只能看自己的 token，decode_A 只能看自己的历史 KV）。FlashAttention 的 varlen 接口用 `cu_seqlens` 偏移量数组标记每个序列的边界，在一次 kernel 调用内完成所有序列的独立注意力计算，将在 step10 详细介绍。
 
 ### 关键参数
 

@@ -246,7 +246,7 @@ flash_attn_with_kvcache(
 `block_table[block_idx] * block_size + slot_in_block` 计算物理地址，
 一次 kernel 调用完成对所有非连续 Block 的 attention 计算。
 
-把 block_table 真正接入 attention 需要 FlashAttention 的 PagedAttention 接口，将在 step09 引入。
+把 block_table 真正接入 attention 需要 FlashAttention 的 PagedAttention 接口，将在 step10 引入。
 
 ---
 

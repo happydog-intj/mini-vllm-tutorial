@@ -1,4 +1,4 @@
-# Step 12: Benchmark — 推理性能评测
+# Step 13: Benchmark — 推理性能评测
 
 ## 为什么需要 Benchmark？
 
@@ -228,7 +228,7 @@ python run.py
 # 无模型时使用模拟数据展示报告格式
 ```
 
-**有模型时**（需要 `step08_real_model` 的 `RealModelEngine`）：
+**有模型时**（需要 `step09_real_model` 的 `RealModelEngine`）：
 
 ```bash
 QWEN3_MODEL_PATH=~/huggingface/Qwen3-0.6B python run.py
@@ -252,11 +252,11 @@ mini-vllm-tutorial Benchmark 工具
 
 总吞吐量: 412 tok/s
 
-✅ step12_benchmark 通过
+✅ step13_benchmark 通过
 ```
 
 ---
 
 ## 下一步
 
-本节的 benchmark 工具建立了性能基线。下一步（step13）将把引擎封装成 **HTTP 推理服务**：实现 OpenAI 兼容的 API 接口，让推理能力可以被其他程序、其他语言、其他机器通过网络调用。
+本节的 benchmark 工具建立了性能基线。下一步（step14）将把引擎封装成 **HTTP 推理服务**：实现 OpenAI 兼容的 API 接口，让推理能力可以被其他程序、其他语言、其他机器通过网络调用。

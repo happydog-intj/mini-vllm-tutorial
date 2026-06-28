@@ -96,7 +96,6 @@ class MultiHeadAttention(nn.Module):
         输出:    形状 [seq_len, d_model]
         """
         seq_len, d_model = x.shape
-
         # Step 1: 投影为 Q、K、V
         Q = self.W_q(x)  # [seq_len, d_model]
         K = self.W_k(x)

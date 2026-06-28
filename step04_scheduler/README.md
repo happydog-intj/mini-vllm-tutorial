@@ -176,7 +176,7 @@ GPU 显存中预分配一个大张量：
 > **注意：这个形状是教学的概念展示，不是代码里的真实存储方式。**
 > 不同实现有不同的存储策略，下面说明三种：
 
-**实现方式一：HuggingFace transformers 风格（本教程 step03a~step09 使用）**
+**实现方式一：HuggingFace transformers 风格（本教程 step03a~step10 使用）**
 
 ```python
 # 每层返回 (K, V) 元组，存在 Python list 里
@@ -229,7 +229,7 @@ block_table_A = [7, 3, 15, ...]   # 请求A的token分散存储在物理块7、3
 特点：显存利用率高（~96%），支持 Continuous Batching 动态分配，
 但需要 block_table 翻译逻辑。这就是 step06 的内容。
 
-**这块内存在 batch 开始前就全部分配好**，不管请求实际生成多少 token，
+**方式一和方式二中，这块内存在 batch 开始前就全部分配好**，不管请求实际生成多少 token，
 500 个槽位的内存都占着——哪怕请求只生成了 50 个 token，另外 450 个槽位空着但无法被其他请求用。
 
 **实际使用情况（假设请求长度差异很大）：**
@@ -329,7 +329,7 @@ attn_C = attention(Q_C, K_C, V_C)      # seq_len=128
 
 FlashAttention 的 `varlen` 接口把方案2的"逐请求串行 attention"变成了"一个 kernel 内批量处理所有序列"——既没有 padding 浪费，attention 部分也是并行的。它带来的不是"能支持变长"，而是"能**高效地并行**支持变长"。
 
-因此 **Continuous Batching 的调度逻辑本身不依赖 FlashAttention**，换成 padding+mask 或逐请求串行 attention 都能跑通，只是 attention 效率低一些。FlashAttention 是独立的性能优化，在 step09 单独引入。
+因此 **Continuous Batching 的调度逻辑本身不依赖 FlashAttention**，换成 padding+mask 或逐请求串行 attention 都能跑通，只是 attention 效率低一些。FlashAttention 是独立的性能优化，在 step10 单独引入。
 
 **这个设计依赖 GPU 硬件吗？**
 
@@ -385,7 +385,7 @@ NVIDIA GPU（CUDA）：  flash-attn 库完整支持，varlen 效果最好
 AMD GPU（ROCm）：     有移植版（hipFlashAttention），主流 GPU 都支持
 Apple MPS（M系列）：  flash-attn 不支持，用 PyTorch 内置的
                       scaled_dot_product_attention 替代
-                      （有类似的 IO 优化但实现不同，本教程 step09 有回退逻辑）
+                      （有类似的 IO 优化但实现不同，本教程 step10 有回退逻辑）
 CPU：                 无 SRAM 优化，用标准矩阵乘法实现
 ```
 
@@ -410,7 +410,7 @@ Continuous Batching 不需要特殊硬件，普通 GPU 就能跑。
 | 需要解决的问题 | 解决方案 | 在本教程的哪一步 |
 |--------------|---------|---------------|
 | KV Cache 动态内存管理（碎片问题） | PagedAttention | step06 |
-| 变长序列高效注意力计算（无需 padding） | FlashAttention varlen | step09 |
+| 变长序列高效注意力计算（无需 padding） | FlashAttention varlen | step10 |
 
 本步（step04）的教学版实现绕开了这两个问题：
 每个请求独立维护自己的 `past_key_values`，内存由 Python 管理，不涉及 GPU 显存碎片；

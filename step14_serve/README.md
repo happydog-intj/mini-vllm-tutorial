@@ -1,4 +1,4 @@
-# Step 13: HTTP Serve — OpenAI 兼容推理服务
+# Step 14: HTTP Serve — OpenAI 兼容推理服务
 
 ## 为什么需要这一步
 
@@ -160,7 +160,7 @@ server.py
 # 安装依赖
 pip install fastapi uvicorn
 
-# 启动（需要先确保 step08_real_model 的模型路径可用）
+# 启动（需要先确保 step09_real_model 的模型路径可用）
 python server.py --model ~/huggingface/Qwen3-0.6B --port 8000
 ```
 
@@ -215,12 +215,12 @@ python run.py
 
 输出：
 ```
-step13: HTTP 服务封装（OpenAI 兼容接口）
+step14: HTTP 服务封装（OpenAI 兼容接口）
 ==================================================
 server.py 语法检查通过 ✅
 FastAPI x.x.x / uvicorn 依赖可用 ✅
 
-✅ step13_serve 通过
+✅ step14_serve 通过
 ```
 
 ## 与真实 vLLM 的差距

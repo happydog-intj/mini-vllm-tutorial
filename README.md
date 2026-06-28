@@ -31,16 +31,17 @@ Phase 5 — PagedAttention
   step07_prefix_cache    ← 前缀缓存，节省 77% 计算
 
 Phase 6 — 真实模型（需要 GPU 推荐）
-  step08_real_model      ← 接入 Qwen3-0.6B
+  step08_paged_prefix_cache ← 分页前缀缓存（待实现）
+  step09_real_model      ← 接入 Qwen3-0.6B
 
 Phase 7 — 高级优化
-  step09_flash_attention ← IO-aware 分块注意力
-  step10_cuda_graph      ← CUDA Graph 录制重放
-  step11_tensor_parallel ← 多 GPU Tensor 并行
+  step10_flash_attention ← IO-aware 分块注意力
+  step11_cuda_graph      ← CUDA Graph 录制重放
+  step12_tensor_parallel ← 多 GPU Tensor 并行
 
 Phase 8 — 工程化
-  step12_benchmark       ← 吞吐量/延迟测量
-  step13_serve           ← OpenAI 兼容 HTTP 服务
+  step13_benchmark       ← 吞吐量/延迟测量
+  step14_serve           ← OpenAI 兼容 HTTP 服务
 ```
 
 ## 快速开始
