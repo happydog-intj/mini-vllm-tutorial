@@ -113,29 +113,29 @@ while pos < prompt_len:
 （驱逐时）：           ref_count = 0  ← 才真正回收，放回空闲池
 ```
 
-## step07 vs step08 V1 vs step08 V2 对比
+## step07 vs step08 对比
 
-| 特性 | step07 | step08 V1 | step08 V2（TinyTransformerPaged）|
-|------|--------|-----------|----------------------------------|
-| KV 快照正确性 | ❌ 含整个 prompt 信息 | ✅ 只含前 N 个 token | ✅ 只含前 N 个 token |
-| 缓存粒度 | 整段 past_key_values | Block 粒度 | Block 粒度 |
-| 跨请求共享 | ❌ 无 ref_count | ✅ ref_count 控制 | ✅ ref_count 控制 |
-| 驱逐支持 | ❌ 永不驱逐 | ✅ ref_count 归零可驱逐 | ✅ ref_count 归零可驱逐 |
-| 增量 prefill | ❌ 全量后缓存 | ✅ 逐 Block 边界缓存 | ✅ 逐 Block 边界缓存 |
-| past_kv 存储 | Python 对象 | Python 对象（游离） | ❌ 彻底消失 |
-| KV 数据托管 | ❌ Python 堆内存 | ❌ Python 堆内存 | ✅ kv_pool 张量（BlockManager 管理） |
-| prefix cache 命中 | 复制 Python 对象引用 | 复制 Python 对象引用 | ✅ block_table 复用，零拷贝 |
+| 特性 | step07 | step08（本章） |
+|------|--------|---------------|
+| KV 快照正确性 | ❌ 含整个 prompt 信息 | ✅ 只含前 N 个 token |
+| 缓存粒度 | 整段 past_key_values | Block 粒度 |
+| 跨请求共享 | ❌ 无 ref_count | ✅ ref_count 控制 |
+| 驱逐支持 | ❌ 永不驱逐 | ✅ ref_count 归零可驱逐 |
+| 增量 prefill | ❌ 全量后缓存 | ✅ 逐 Block 边界缓存 |
+| past_kv 存储 | Python 对象（游离） | ❌ 彻底消失 |
+| KV 数据托管 | ❌ Python 堆内存 | ✅ kv_pool 张量（BlockManager 管理） |
+| prefix cache 命中 | 复制 Python 对象引用 | ✅ block_table 复用，零拷贝 |
 
-## V2：TinyTransformerPaged
+## TinyTransformerPaged
 
 `model_paged.py` 实现了 `TinyTransformerPaged`，把 `past_key_values` 彻底替换为 `kv_pool + block_table`：
 
 ```python
-# V1（TinyTransformerWithKVCache）：
-logits, past_kv = model(chunk, past_key_values=past_kv)  # past_kv 是 Python 对象
+# TinyTransformerWithKVCache（step03a~step07）：
+logits, past_kv = model(chunk, past_key_values=past_kv)  # past_kv 是 Python 对象，每步返回
 
-# V2（TinyTransformerPaged）：
-logits = model(chunk, block_table=block_table, start_pos=pos)  # KV 写入 kv_pool，无返回值
+# TinyTransformerPaged（本章）：
+logits = model(chunk, block_table=block_table, start_pos=pos)  # KV 直接写入 kv_pool，无返回值
 ```
 
 `kv_pool` 作为模型的 `register_buffer` 注册，每层各有一对：
