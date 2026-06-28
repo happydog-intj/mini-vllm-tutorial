@@ -295,6 +295,42 @@ FlashAttention varlen:
   cu_seqlens: [0, 47, 359, 487]  ← 告诉 GPU 每个序列的起止位置
 ```
 
+**不依赖 FlashAttention 能实现变长序列支持吗？**
+
+可以，但效率不同。有两种替代方案：
+
+**方案1：padding + attention_mask**
+
+把不同长度的序列 pad 到最长，用 mask 屏蔽填充位（step03b 的做法）：
+
+```python
+scores = Q @ K.T  # [batch, max_len, max_len]
+scores = scores.masked_fill(padding_mask, float("-inf"))
+```
+
+完全可行，PyTorch 原生支持。代价是 pad 位置的计算被白算了，浪费随序列长度差异增大。
+
+**方案2：线性层 batch，attention 逐请求串行**
+
+```python
+# 线性层（Q/K/V 投影）批量计算，利用 GPU 并行
+x_batch = torch.cat([x_A, x_B, x_C])   # [47+312+128, hidden]
+Q = x_batch @ W_Q                       # 一次矩阵乘法
+
+# Attention 部分逐请求单独计算，各自用自己的 KV Cache
+attn_A = attention(Q_A, K_A, V_A)      # seq_len=47
+attn_B = attention(Q_B, K_B, V_B)      # seq_len=312
+attn_C = attention(Q_C, K_C, V_C)      # seq_len=128
+```
+
+无需 padding 也无需 FlashAttention。代价是 attention 部分无法批量，只能串行。
+
+**FlashAttention varlen 的真正优势**
+
+FlashAttention 的 `varlen` 接口把方案2的"逐请求串行 attention"变成了"一个 kernel 内批量处理所有序列"——既没有 padding 浪费，attention 部分也是并行的。它带来的不是"能支持变长"，而是"能**高效地并行**支持变长"。
+
+因此 **Continuous Batching 的调度逻辑本身不依赖 FlashAttention**，换成 padding+mask 或逐请求串行 attention 都能跑通，只是 attention 效率低一些。FlashAttention 是独立的性能优化，在 step09 单独引入。
+
 **这个设计依赖 GPU 硬件吗？**
 
 分两层回答：
