@@ -9,7 +9,7 @@ step08: Paged Prefix Cache 演示
 
 import time
 import torch
-from engine import PagedPrefixCacheEngine
+from engine import PagedPrefixCacheEngine  # engine.py 包含完整实现
 
 SYSTEM_PROMPT_LEN = 32   # 共享前缀长度（模拟 system prompt）
 USER_QUESTION_LEN = 8    # 每个请求独有的后缀
