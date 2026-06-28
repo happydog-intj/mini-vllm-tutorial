@@ -2,25 +2,47 @@ import torch
 from block_manager import BlockManager
 
 def main():
-    # ── 展示 1：BlockManager 基本操作 ──
-    bm = BlockManager(total_blocks=10, block_size=4)
+    # ── 展示 1：逻辑位置 vs 物理槽位不一致 ──
+    # 用 total_blocks=6，block_size=4 演示非连续物理分配
+    bm = BlockManager(total_blocks=6, block_size=4)
+    print("=" * 55)
+    print("展示：逻辑位置 ≠ 物理槽位（非连续分配）")
+    print("=" * 55)
     print(f"总 Block 数: {bm.total_blocks}，Block 大小: {bm.block_size}")
-    print(f"初始空闲 Block 数: {bm.num_free_blocks}")
+    print(f"初始空闲 Block: {[b.block_id for b in bm._free]}")
 
-    block_table = bm.allocate(num_blocks=2)
-    print(f"\n分配 2 个 Block: {block_table}")
-    print(f"剩余空闲: {bm.num_free_blocks}")
+    # 请求 A 先占用 block 0、1、2
+    table_a = bm.allocate(num_blocks=3)
+    print(f"\n请求A 分配 3 个 Block: {table_a}  ← 占用 block 0,1,2")
+    print(f"剩余空闲 Block: {[b.block_id for b in bm._free]}")
 
-    print("\n逻辑位置 → 物理槽位翻译:")
+    # 请求 A 中间释放 block 1（block_id=1 归还）
+    bm.free([table_a[1]])
+    table_a = [table_a[0], table_a[2]]  # 保留 block 0 和 2
+    print(f"\n请求A 释放 block 1，当前使用: {table_a}")
+    print(f"空闲 Block: {[b.block_id for b in bm._free]}  ← block 1 回到空闲池")
+
+    # 请求 B 分配 2 个 block：拿到 block 1 和 block 3（不连续）
+    table_b = bm.allocate(num_blocks=2)
+    print(f"\n请求B 分配 2 个 Block: {table_b}  ← 物理上不连续！")
+
+    print("\n逻辑位置 → 物理槽位翻译（请求B，block_size=4）:")
+    print(f"  block_table = {table_b}  (逻辑block0→物理block{table_b[0]}, 逻辑block1→物理block{table_b[1]})")
+    print()
     for token_pos in range(8):
-        physical_slot = bm.translate_slot(block_table, token_pos)
+        physical_slot = bm.translate_slot(table_b, token_pos)
         block_idx = token_pos // bm.block_size
         slot_in = token_pos % bm.block_size
-        print(f"  逻辑位置 {token_pos} → Block[{block_idx}]={block_table[block_idx]} "
-              f"slot {slot_in} → 物理槽位 {physical_slot}")
+        print(f"  逻辑位置 {token_pos} (block[{block_idx}] slot {slot_in})"
+              f"  →  物理 block {table_b[block_idx]} slot {slot_in}"
+              f"  →  物理槽位 {physical_slot}"
+              + ("  ← 逻辑≠物理！" if physical_slot != token_pos else ""))
 
-    bm.free(block_table)
-    print(f"\n释放后空闲: {bm.num_free_blocks}")
+    print(f"\n请求A 释放: {table_a}")
+    bm.free(table_a)
+    print(f"请求B 释放: {table_b}")
+    bm.free(table_b)
+    print(f"全部释放后空闲 Block 数: {bm.num_free_blocks}")
     assert bm.num_free_blocks == bm.total_blocks
 
     # ── 展示 2：显存利用率对比 ──
