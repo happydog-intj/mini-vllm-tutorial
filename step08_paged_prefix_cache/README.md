@@ -16,7 +16,7 @@ step07 的实现能跑通，但有两个根本性缺陷：
 **问题1：缓存了错误的 KV 快照**
 
 ```python
-# step07 的做法：prompt 全部跑完后再缓存各边界的 hash
+# step07 的做法：prompt 全部跑完后按照block计算hash并缓存
 for end in range(block_size, prompt_len + 1, block_size):
     h = compute_hash(tokens, end)
     prefix_cache[h] = past_kv   # ← past_kv 含完整 prompt 的信息，不是前 end 个 token！
@@ -56,6 +56,27 @@ while pos < prompt_len:
 ```
 
 此时 `past_kv` 只包含 `tokens[0:pos]` 的 KV，是真正意义上的"前 pos 个 token 的缓存"。
+
+### 顺带实现了 Chunked Prefill
+
+逐 Block 增量 prefill 的循环结构和 [step05a 的 Chunked Prefill](../step05a_chunked_prefill/README.md) 完全相同——都是把长 prompt 切成小块依次处理：
+
+```python
+while pos < prompt_len:
+    chunk = prompt_ids[pos : pos + block_size]   # chunk_size = block_size
+    logits, past_kv = model(chunk, past_kv=past_kv)
+    pos += len(chunk)
+```
+
+两者解决的问题不同，但机制一致：
+
+| | step05a Chunked Prefill | step08 逐 Block Prefill |
+|---|---|---|
+| 切块目的 | 不阻塞 decode，每块后让 decode 执行一步 | 在边界处保存正确的 KV 快照 |
+| chunk_size 由什么决定 | 调度参数（如 512） | block_size（如 16） |
+| 副作用 | 顺带可以在边界缓存 KV | 顺带避免长 prefill 独占 GPU |
+
+真实 vLLM 把两者合并为同一个机制：chunk_size = block_size，每次处理一个 Block，既满足 prefix cache 的边界对齐需求，又天然支持与 decode 交替执行。
 
 ## ref_count 管理
 
