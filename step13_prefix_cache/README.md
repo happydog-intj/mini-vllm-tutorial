@@ -12,14 +12,14 @@
 
 前缀缓存的思路：**把已经算好的前缀 K/V 存下来，下一个请求命中时直接复用，跳过对应的 Prefill 计算。**
 
-这个思路和 [step07 的 KV Cache](../step07_kvcache_single/README.md) 一脉相承：
+这个思路和 [单请求 KV Cache 的 KV Cache](../step07_kvcache_single/README.md) 一脉相承：
 
 ```
-step07 KV Cache（请求内复用）：
+单请求 KV Cache KV Cache（请求内复用）：
   同一请求内，历史 token 的 K/V 只算一次，后续 decode 步骤直接读缓存
   复用边界：单个请求的历史 token
 
-step13 Prefix Cache（跨请求复用）：
+Prefix Caching：相同前缀只算一次 Prefix Cache（跨请求复用）：
   不同请求共享相同前缀时，前缀的 K/V 只算一次，后续请求直接复用
   复用边界：多个请求之间的公共前缀
 ```
@@ -69,7 +69,7 @@ K/V Cache 是张量，天然存在显存（GPU 内存）里。前缀缓存就是
 
 K/V Cache 是按 token 逐步增长的，理论上可以缓存任意长度的前缀。但太细（每个 token 一条缓存条目）会让字典很大、查找慢；太粗（整个 prompt 一条）命中率低。
 
-实践中按**固定大小的 Block**（如 16 个 token）为单位缓存，命中时复用整块，未命中的尾部再临时计算。这与 step12 的 PagedAttention 分块完全对应，两者共用同一套 Block 管理机制。
+实践中按**固定大小的 Block**（如 16 个 token）为单位缓存，命中时复用整块，未命中的尾部再临时计算。这与 PagedAttention：分页内存管理 的 PagedAttention 分块完全对应，两者共用同一套 Block 管理机制。
 
 ### 问题三：如何快速判断「这段前缀是否已经缓存过」？
 
@@ -374,6 +374,6 @@ def generate_batch(self, requests):
 
 ## 下一步
 
-step13 的实现有两个根本缺陷：缓存了错误位置的 KV 快照（含整个 prompt 信息而非前 N 个 token），以及 `past_kv` 是游离的 Python 对象，无法跨请求共享物理显存。
+Prefix Caching：相同前缀只算一次 的实现有两个根本缺陷：缓存了错误位置的 KV 快照（含整个 prompt 信息而非前 N 个 token），以及 `past_kv` 是游离的 Python 对象，无法跨请求共享物理显存。
 
-step14 将结合 step12 的分页内存管理，修正这两个问题：逐 Block 增量 prefill 保存正确快照，`past_kv` 彻底消失，KV 数据全部存入由 BlockManager 管理的 `kv_pool`，prefix cache 命中时只需把已缓存的 `block_id` 加入 `block_table`——零拷贝复用。
+Paged Prefix Cache 将结合 PagedAttention：分页内存管理 的分页内存管理，修正这两个问题：逐 Block 增量 prefill 保存正确快照，`past_kv` 彻底消失，KV 数据全部存入由 BlockManager 管理的 `kv_pool`，prefix cache 命中时只需把已缓存的 `block_id` 加入 `block_table`——零拷贝复用。

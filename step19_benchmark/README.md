@@ -259,4 +259,4 @@ mini-vllm-tutorial Benchmark 工具
 
 ## 下一步
 
-本节的 benchmark 工具建立了性能基线。下一步（step20）将把引擎封装成 **HTTP 推理服务**：实现 OpenAI 兼容的 API 接口，让推理能力可以被其他程序、其他语言、其他机器通过网络调用。
+本节的 benchmark 工具建立了性能基线。下一步（HTTP Serve：OpenAI 兼容推理服务）将把引擎封装成 **HTTP 推理服务**：实现 OpenAI 兼容的 API 接口，让推理能力可以被其他程序、其他语言、其他机器通过网络调用。

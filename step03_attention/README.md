@@ -227,4 +227,4 @@ def split_heads(t):
 
 但实际推理中面临新问题：**每次生成一个 token 时，K 和 V 都需要重新计算整个历史序列**，当序列很长时，这是极大的浪费。
 
-下一步（step04）将引入另外两个组件——**MLP（SwiGLU）** 和 **归一化（RMSNorm）**，并把它们与注意力一起组装成一个完整的 Transformer Decoder 层。
+下一步（Transformer Decoder 层：组装完整计算单元）将引入另外两个组件——**MLP（SwiGLU）** 和 **归一化（RMSNorm）**，并把它们与注意力一起组装成一个完整的 Transformer Decoder 层。

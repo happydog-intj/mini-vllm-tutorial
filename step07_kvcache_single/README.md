@@ -2,7 +2,7 @@
 
 ## 为什么需要 KV Cache？
 
-在 step05 的朴素推理中，每生成一个新 token，引擎都要把整个已有序列重新跑一遍前向：
+在 朴素自回归推理 的朴素推理中，每生成一个新 token，引擎都要把整个已有序列重新跑一遍前向：
 
 ```
 生成第 1 个新 token：输入 [t0,t1,t2,t3,t4]           → 5 步注意力计算
@@ -14,7 +14,7 @@
 
 总计算量随序列长度平方增长：O(n²)。生成越长，越慢。
 
-这是 step05 的根本性能瓶颈。KV Cache 通过**缓存已算过的中间结果**来消除重复计算。
+这是 朴素自回归推理 的根本性能瓶颈。KV Cache 通过**缓存已算过的中间结果**来消除重复计算。
 
 ---
 
@@ -86,7 +86,7 @@ Decode 阶段（逐步生成，每步只传 1 个 token）
 
 ## 计算量分析：从 O(n²) 到 O(n)
 
-**朴素推理**（step05）：
+**朴素推理**（朴素自回归推理）：
 ```
 生成 n 个新 token，第 k 步序列长度 = prompt_len + k
 
@@ -195,7 +195,7 @@ else:
 
 ### 改动三：因果掩码的调整
 
-step05 中因果掩码的逻辑很简单——上三角全部屏蔽：
+朴素自回归推理 中因果掩码的逻辑很简单——上三角全部屏蔽：
 
 ```python
 # step05：seq_len × seq_len 的掩码，上三角置 -inf
@@ -203,7 +203,7 @@ mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
 scores = scores.masked_fill(mask, float("-inf"))
 ```
 
-step07 中需要处理 Prefill 和 Decode 两种情况：
+单请求 KV Cache 中需要处理 Prefill 和 Decode 两种情况：
 
 ```python
 # step07：
@@ -228,7 +228,7 @@ scores = scores.masked_fill(mask, float("-inf"))
 - 这是正确的：新 token 是当前序列末尾，可以看所有历史
 
 **Prefill 时（seq_len=prompt_len，past_len=0）**：
-- 退化为标准的因果掩码，与 step05 行为完全一致
+- 退化为标准的因果掩码，与 朴素自回归推理 行为完全一致
 
 用矩阵直观表示（✓ = 允许 attend，✗ = 屏蔽为 -inf）：
 
@@ -287,7 +287,7 @@ for _ in range(max_new_tokens - 1):
     next_id = self._sample(logits[-1], temperature)
 ```
 
-对比 step05 的朴素引擎，每步 Decode 的输入从"完整序列"缩小到"1 个 token"。
+对比 朴素自回归推理 的朴素引擎，每步 Decode 的输入从"完整序列"缩小到"1 个 token"。
 
 ---
 
@@ -297,7 +297,7 @@ for _ in range(max_new_tokens - 1):
 
 ### 问题：每步都要搬一次完整的历史数据
 
-step07 的实现里，每个 Decode 步骤都调用：
+单请求 KV Cache 的实现里，每个 Decode 步骤都调用：
 
 ```python
 K_full = torch.cat([K_past, K_new], dim=0)
@@ -365,7 +365,7 @@ K_full = K_cache[:current_pos + 1]   # O(1)，零复制！
 - 每步 O(k) 的内存复制，总计 O(n²)
 - 频繁的显存分配/回收，加速 GPU 内存碎片化
 
-**step12 的 PagedAttention 进一步改进**：把 KV Cache 切成固定大小的 Block（如 16 个 token），每次只分配一个新 Block，既避免了 `torch.cat` 的整体复制，也解决了大块预分配带来的碎片问题。
+**PagedAttention：分页内存管理 的 PagedAttention 进一步改进**：把 KV Cache 切成固定大小的 Block（如 16 个 token），每次只分配一个新 Block，既避免了 `torch.cat` 的整体复制，也解决了大块预分配带来的碎片问题。
 
 ---
 
@@ -391,7 +391,7 @@ KV Cache 不是免费的午餐，它以**显存**换取**计算时间**：
 - 不开 KV Cache：计算密集，矩阵乘法充分利用计算单元
 - 开 KV Cache：内存密集，每步都要从显存读出全部历史 K/V
 
-随着请求数量增加，KV Cache 占用的显存会快速耗尽。这是 step08 要面对的问题。
+随着请求数量增加，KV Cache 占用的显存会快速耗尽。这是 多请求 KV Cache + Static Batching 要面对的问题。
 
 ---
 
@@ -426,7 +426,7 @@ KV Cache 效果 — NaiveEngine vs KVCacheEngine
 
 ## 下一步
 
-step07 解决了单个请求的重复计算问题。
+单请求 KV Cache 解决了单个请求的重复计算问题。
 
 但实际推理服务需要**同时服务多个用户**，每个请求的 prompt 长度不同、生成进度不同。
 直接把多个请求的 KV Cache 拼在一起，会遇到两个问题：
@@ -455,5 +455,5 @@ GPU 矩阵乘法要求 batch 内所有序列形状相同，但各请求长度不
 
 必须 padding 到同一长度（512），B 和 C 要对大量填充位置做无意义的注意力计算，浪费算力，且请求长度差异越大，浪费越严重。
 
-→ **step08**：多请求 Batch 推理——如何让多个请求共享一次 GPU 前向，同时管理各自的 KV Cache？
-step08 用 attention mask 解决对齐问题；step12 的 PagedAttention 则从根本上消除显存碎片化。
+→ **多请求 KV Cache + Static Batching**：多请求 Batch 推理——如何让多个请求共享一次 GPU 前向，同时管理各自的 KV Cache？
+多请求 KV Cache + Static Batching 用 attention mask 解决对齐问题；PagedAttention：分页内存管理 的 PagedAttention 则从根本上消除显存碎片化。

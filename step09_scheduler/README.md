@@ -6,7 +6,7 @@
 
 ## step08 的遗留问题
 
-step08 实现了 Static Batching：把多个请求合并成一个 batch，
+多请求 KV Cache + Static Batching 实现了 Static Batching：把多个请求合并成一个 batch，
 利用 GPU 并行矩阵乘法提升吞吐量。
 
 但是，**batch 是在处理开始前就固定的**：
@@ -128,14 +128,14 @@ while scheduler.has_work:
 ## Static vs Continuous Batching
 
 ```
-Static Batching（step08）：
+Static Batching（多请求 KV Cache + Static Batching）：
   时刻  0: batch = [A, B, C, D]  固定，不能变
   时刻  5: B 完成，槽位空转
   时刻 10: C 完成，槽位空转
   时刻 15: D 完成，槽位空转
   时刻 20: A 完成，batch 结束 → 才能接受 E, F, G, H
 
-Continuous Batching（step09）：
+Continuous Batching（Continuous Batching 调度器）：
   时刻  0: running = [A, B, C, D]
   时刻  5: B 完成 → 立刻换入 E
   时刻 10: C 完成 → 立刻换入 F
@@ -176,7 +176,7 @@ GPU 显存中预分配一个大张量：
 > **注意：这个形状是教学的概念展示，不是代码里的真实存储方式。**
 > 不同实现有不同的存储策略，下面说明三种：
 
-**实现方式一：HuggingFace transformers 风格（本教程 step07~step16 使用）**
+**实现方式一：HuggingFace transformers 风格（本教程 单请求 KV Cache~FlashAttention：SRAM-aware 注意力计算 使用）**
 
 ```python
 # 每层返回 (K, V) 元组，存在 Python list 里
@@ -227,7 +227,7 @@ block_table_A = [7, 3, 15, ...]   # 请求A的token分散存储在物理块7、3
 ```
 
 特点：显存利用率高（~96%），支持 Continuous Batching 动态分配，
-但需要 block_table 翻译逻辑。这就是 step12 的内容。
+但需要 block_table 翻译逻辑。这就是 PagedAttention：分页内存管理 的内容。
 
 **方式一和方式二中，这块内存在 batch 开始前就全部分配好**，不管请求实际生成多少 token，
 500 个槽位的内存都占着——哪怕请求只生成了 50 个 token，另外 450 个槽位空着但无法被其他请求用。
@@ -267,7 +267,7 @@ Continuous Batching 下请求随进随出，这种「一次性预分配大块」
 
 ```
 
-→ 解决方案：PagedAttention（step12）
+→ 解决方案：PagedAttention（PagedAttention：分页内存管理）
 
 ### 前提二：变长序列的高效注意力计算
 
@@ -301,7 +301,7 @@ FlashAttention varlen:
 
 **方案1：padding + attention_mask**
 
-把不同长度的序列 pad 到最长，用 mask 屏蔽填充位（step08 的做法）：
+把不同长度的序列 pad 到最长，用 mask 屏蔽填充位（多请求 KV Cache + Static Batching 的做法）：
 
 ```python
 scores = Q @ K.T  # [batch, max_len, max_len]
@@ -329,7 +329,7 @@ attn_C = attention(Q_C, K_C, V_C)      # seq_len=128
 
 FlashAttention 的 `varlen` 接口把方案2的"逐请求串行 attention"变成了"一个 kernel 内批量处理所有序列"——既没有 padding 浪费，attention 部分也是并行的。它带来的不是"能支持变长"，而是"能**高效地并行**支持变长"。
 
-因此 **Continuous Batching 的调度逻辑本身不依赖 FlashAttention**，换成 padding+mask 或逐请求串行 attention 都能跑通，只是 attention 效率低一些。FlashAttention 是独立的性能优化，在 step16 单独引入。
+因此 **Continuous Batching 的调度逻辑本身不依赖 FlashAttention**，换成 padding+mask 或逐请求串行 attention 都能跑通，只是 attention 效率低一些。FlashAttention 是独立的性能优化，在 FlashAttention：SRAM-aware 注意力计算 单独引入。
 
 **这个设计依赖 GPU 硬件吗？**
 
@@ -385,7 +385,7 @@ NVIDIA GPU（CUDA）：  flash-attn 库完整支持，varlen 效果最好
 AMD GPU（ROCm）：     有移植版（hipFlashAttention），主流 GPU 都支持
 Apple MPS（M系列）：  flash-attn 不支持，用 PyTorch 内置的
                       scaled_dot_product_attention 替代
-                      （有类似的 IO 优化但实现不同，本教程 step16 有回退逻辑）
+                      （有类似的 IO 优化但实现不同，本教程 FlashAttention：SRAM-aware 注意力计算 有回退逻辑）
 CPU：                 无 SRAM 优化，用标准矩阵乘法实现
 ```
 
@@ -409,12 +409,12 @@ Continuous Batching 不需要特殊硬件，普通 GPU 就能跑。
 
 | 需要解决的问题 | 解决方案 | 在本教程的哪一步 |
 |--------------|---------|---------------|
-| KV Cache 动态内存管理（碎片问题） | PagedAttention | step12 |
-| 变长序列高效注意力计算（无需 padding） | FlashAttention varlen | step16 |
+| KV Cache 动态内存管理（碎片问题） | PagedAttention | PagedAttention：分页内存管理 |
+| 变长序列高效注意力计算（无需 padding） | FlashAttention varlen | FlashAttention：SRAM-aware 注意力计算 |
 
-本步（step09）的教学版实现绕开了这两个问题：
+本步（Continuous Batching 调度器）的教学版实现绕开了这两个问题：
 每个请求独立维护自己的 `past_key_values`，内存由 Python 管理，不涉及 GPU 显存碎片；
-注意力计算沿用 step07 的逐条处理方式，不做真正的 batch 注意力。
+注意力计算沿用 单请求 KV Cache 的逐条处理方式，不做真正的 batch 注意力。
 **这样能清晰展示调度逻辑，后续步骤再逐一解决底层问题。**
 
 
@@ -428,5 +428,5 @@ python run.py
 
 ## 下一步
 
-step10：如果来了一个超长 prompt（1000 个 token），它的 prefill
+Chunked Prefill：切片长 Prompt：如果来了一个超长 prompt（1000 个 token），它的 prefill
 会占用整个 step，让其他请求的 decode 完全停下来等——Chunked Prefill 解决这个问题。

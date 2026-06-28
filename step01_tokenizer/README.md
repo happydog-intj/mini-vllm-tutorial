@@ -212,4 +212,4 @@ Token IDs: [...]         ← 长度比字符数少，说明发生了合并
 
 现在我们知道文本怎么变成 token id 序列了。但 LLM 的输入层接受的不是整数，而是**向量**。
 
-**step02** 解决这个问题：token id → 向量（Embedding）。每个 id 对应一行可训练的参数矩阵，这个过程叫 Embedding lookup，是模型理解语义的起点。
+**Embedding：数字变向量** 解决这个问题：token id → 向量（Embedding）。每个 id 对应一行可训练的参数矩阵，这个过程叫 Embedding lookup，是模型理解语义的起点。

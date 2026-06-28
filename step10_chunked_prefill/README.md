@@ -7,7 +7,7 @@ Chunked Prefill 如何通过分块混合调度解决这个问题。
 
 ## Prefill 和 Decode 的根本差异
 
-先回顾一下 [step07](../step07_kvcache_single/README.md) 引入的两个阶段：
+先回顾一下 [单请求 KV Cache](../step07_kvcache_single/README.md) 引入的两个阶段：
 
 ```
 Prefill（处理 prompt）：
@@ -38,7 +38,7 @@ Decode：小矩阵 + 大 KV Cache 读取，GPU 的显存带宽是瓶颈
 
 ## 那么问题来了：长 Prefill任务一定会阻塞Decode任务
 
-[step09 的 Continuous Batching](../step09_scheduler/README.md) 让短请求完成后立刻补充新请求，
+[Continuous Batching 调度器 的 Continuous Batching](../step09_scheduler/README.md) 让短请求完成后立刻补充新请求，
 但有一个新问题：**新请求进来时需要先做 Prefill。**
 
 Prefill 的计算量随 prompt 长度的平方增长：
@@ -82,7 +82,7 @@ prompt 长度    Prefill 耗时（Qwen3-0.6B，A100 估算）
 
 ## 为什么 step09 的 Continuous Batching 没有解决这个问题？
 
-step09 解决了「短请求完成后槽位空转」的问题，
+Continuous Batching 调度器 解决了「短请求完成后槽位空转」的问题，
 但 Continuous Batching 本身对每个 step 的调度粒度是：
 
 ```
@@ -90,7 +90,7 @@ step09 解决了「短请求完成后槽位空转」的问题，
 当有 prefill 请求时，整个 step 的时间由 prefill 决定
 ```
 
-step09 的 `scheduler.py` 里，`prefill_seqs` 的 prefill 是一次性完成的：
+Continuous Batching 调度器 的 `scheduler.py` 里，`prefill_seqs` 的 prefill 是一次性完成的：
 
 ```python
 # step09/scheduler.py — 问题所在
@@ -197,7 +197,7 @@ GPU 的矩阵乘法有固定的 kernel 启动开销（约 0.05ms/次）。decode
 
 **为什么需要 FlashAttention varlen？**
 
-各序列虽然 token 拼在一起，但注意力计算必须**各自独立**（prefill chunk 只能看自己的 token，decode_A 只能看自己的历史 KV）。FlashAttention 的 varlen 接口用 `cu_seqlens` 偏移量数组标记每个序列的边界，在一次 kernel 调用内完成所有序列的独立注意力计算，将在 step16 详细介绍。
+各序列虽然 token 拼在一起，但注意力计算必须**各自独立**（prefill chunk 只能看自己的 token，decode_A 只能看自己的历史 KV）。FlashAttention 的 varlen 接口用 `cu_seqlens` 偏移量数组标记每个序列的边界，在一次 kernel 调用内完成所有序列的独立注意力计算，将在 FlashAttention：SRAM-aware 注意力计算 详细介绍。
 
 ### 关键参数
 
@@ -236,4 +236,4 @@ python run.py
 
 ## 下一步
 
-step11：Preemption——如果 KV Cache 显存装不下所有 running 请求怎么办？
+Preemption：抢占避免 OOM：Preemption——如果 KV Cache 显存装不下所有 running 请求怎么办？

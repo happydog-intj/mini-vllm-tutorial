@@ -264,7 +264,7 @@ logits = self.lm_head(x)   # [6, 128] @ [128, 256] → [6, 256]
 
 每步新增 1 个 token，却要重算所有 n 个 token 的 K/V。
 K/V 不会因为后续 token 的存在而改变（K_i = f(token_i)），
-所以这种重算是纯粹的浪费——**这正是 step07 KV Cache 要解决的问题**。
+所以这种重算是纯粹的浪费——**这正是 单请求 KV Cache KV Cache 要解决的问题**。
 
 ---
 
@@ -362,7 +362,7 @@ Decode 阶段（生成新 token）:
         GPU 每步计算量较少，大量算力被用于重复计算
 ```
 
-朴素实现没有区分这两个阶段——每步都把全部 token 传入，Prefill 的工作在 Decode 的每一步都被重做。step07 会专门解决这个问题。
+朴素实现没有区分这两个阶段——每步都把全部 token 传入，Prefill 的工作在 Decode 的每一步都被重做。单请求 KV Cache 会专门解决这个问题。
 
 ---
 
@@ -407,6 +407,6 @@ python run.py
 
 ## 下一步
 
-**step06** 解决采样策略问题：`argmax`（贪心解码）每次选概率最高的 token，生成结果单调、缺乏多样性。Temperature 采样、Top-k、Top-p 等策略控制如何从概率分布中抽取 token，影响生成质量。
+**采样算法：logits → next_token** 解决采样策略问题：`argmax`（贪心解码）每次选概率最高的 token，生成结果单调、缺乏多样性。Temperature 采样、Top-k、Top-p 等策略控制如何从概率分布中抽取 token，影响生成质量。
 
-**step07** 解决 O(n²) 的根本问题：引入 KV Cache，把每个 token 的 K/V 向量缓存起来，Decode 阶段每步只计算新增 token 的 K/V，消除重复计算。
+**单请求 KV Cache** 解决 O(n²) 的根本问题：引入 KV Cache，把每个 token 的 K/V 向量缓存起来，Decode 阶段每步只计算新增 token 的 K/V，消除重复计算。

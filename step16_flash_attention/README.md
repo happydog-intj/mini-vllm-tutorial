@@ -95,7 +95,7 @@ FlashAttention（分块 + 片上计算）：
 
 ## 变长序列（varlen）接口：Continuous Batching 的实际需求
 
-step09 提到，Continuous Batching 下同一 batch 内不同请求的序列长度各不相同：
+Continuous Batching 调度器 提到，Continuous Batching 下同一 batch 内不同请求的序列长度各不相同：
 
 ```
 某一时刻的 batch：
@@ -202,7 +202,7 @@ Decode（生成阶段，每次只有 1 个新 token）：
         同时支持直接传入 page table（block_table）读取分页 KV Cache
 ```
 
-**本教程 step16 的实现是教学简化版**，使用 `flash_attn_func`（非 varlen，非 kvcache），
+**本教程 FlashAttention：SRAM-aware 注意力计算 的实现是教学简化版**，使用 `flash_attn_func`（非 varlen，非 kvcache），
 演示 FlashAttention 的基本封装和正确性验证。
 完整的 varlen + kvcache 分发逻辑在 nano-vllm 等完整推理引擎中实现。
 
@@ -222,7 +222,7 @@ AMD GPU（ROCm）：
 Apple Silicon（M 系列，MPS 后端）：
   flash-attn 库不支持 MPS
   PyTorch 内置的 scaled_dot_product_attention 有类似 IO 优化
-  本教程 step16 的 flash_attention() 在非 CUDA 设备上自动回退到 SDPA
+  本教程 FlashAttention：SRAM-aware 注意力计算 的 flash_attention() 在非 CUDA 设备上自动回退到 SDPA
 
 CPU：
   无片上缓存优化，用标准矩阵乘法
@@ -305,7 +305,7 @@ FlashAttention 减少了显存读写，但也有限制：
 
 ## 下一步
 
-step17：CUDA Graph——GPU kernel 每次启动都有调度开销，
+CUDA Graph：录制重放，跳过调度层：CUDA Graph——GPU kernel 每次启动都有调度开销，
 Decode 阶段每步只处理 1 个 token，计算量极小但 kernel 启动次数多，
 调度开销反而成了瓶颈。CUDA Graph 把固定形状的计算图录制下来，
 后续重复执行时绕过 CPU 调度，大幅降低 Decode 的延迟。

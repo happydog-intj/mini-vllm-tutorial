@@ -208,4 +208,4 @@ python run.py
 
 ## 下一步
 
-到这一步，我们已经优化了 decode 阶段的调度延迟。下一步（step18）将引入 **Tensor Parallelism**：把模型权重切分到多张 GPU 上，通过列并行与行并行让单卡装不下的大模型也能高效推理。
+到这一步，我们已经优化了 decode 阶段的调度延迟。下一步（Tensor Parallelism：多卡分布式推理）将引入 **Tensor Parallelism**：把模型权重切分到多张 GPU 上，通过列并行与行并行让单卡装不下的大模型也能高效推理。

@@ -2,7 +2,7 @@
 
 ## 背景：step07 解决了单请求，但生产环境需要同时服务多个用户
 
-step07 引入了 KV Cache，让单个请求的推理从 O(n²) 降到 O(n)。但实际推理服务面对的是**多个并发用户**：
+单请求 KV Cache 引入了 KV Cache，让单个请求的推理从 O(n²) 降到 O(n)。但实际推理服务面对的是**多个并发用户**：
 
 ```
 用户 A：发了一条长 prompt（500 token），正在生成回复
@@ -152,7 +152,7 @@ batch=64: 利用率接近上限，再加 batch 速度不再提升，但显存和
 **实际生产系统的做法：**
 
 不是固定一个大 batch，而是**动态调度**——
-有多少请求就用多大的 batch，不够就不等，这就是 step09 的 Continuous Batching。
+有多少请求就用多大的 batch，不够就不等，这就是 Continuous Batching 调度器 的 Continuous Batching。
 
 | 方式 | 矩阵乘法的规模 | 典型耗时量级 |
 |------|--------------|------------|
@@ -261,13 +261,13 @@ Static Batching（本步实现）：
   step 1~20：[请求A, 请求B, 请求C, 请求D]  ← 固定 4 个槽位，等到最长完成
   step 11 之后：请求B 已完成，但槽位空转
 
-Continuous Batching（step09 引入）：
+Continuous Batching（Continuous Batching 调度器 引入）：
   step 1~10：[请求A, 请求B, 请求C, 请求D]
   step 11：  请求B 完成 → 立刻释放槽位，新请求E 填入
   step 11+：[请求A, 请求E, 请求C, 请求D]  ← 槽位持续被占满
 ```
 
-效果：GPU 的 decode 槽位永远被有效请求占满，不存在空转。这是 vLLM 高吞吐的核心机制之一，将在 step09 详细实现。
+效果：GPU 的 decode 槽位永远被有效请求占满，不存在空转。这是 vLLM 高吞吐的核心机制之一，将在 Continuous Batching 调度器 详细实现。
 
 **本步 run.py 实测：Decode idle 浪费约 29%**
 
@@ -276,8 +276,8 @@ Continuous Batching（step09 引入）：
 
 | 问题 | 原因 | 浪费量（本步实测）| 后续解决方案 |
 |------|------|-----------------|------------|
-| Prefill padding 浪费 | 长度不同必须补齐 | ~46% | step12 PagedAttention |
-| Decode idle 空转 | 短请求等长请求 | ~29% | step09 Continuous Batching |
+| Prefill padding 浪费 | 长度不同必须补齐 | ~46% | PagedAttention：分页内存管理 PagedAttention |
+| Decode idle 空转 | 短请求等长请求 | ~29% | Continuous Batching 调度器 Continuous Batching |
 
 ## 代码结构
 

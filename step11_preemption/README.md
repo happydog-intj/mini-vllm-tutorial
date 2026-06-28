@@ -2,7 +2,7 @@
 
 ## 为什么需要抢占？
 
-在 [step10 的 Continuous Batching](../step10_chunked_prefill/README.md) 中，调度器持续把 waiting 队列的请求接入 running 队列。
+在 [Chunked Prefill：切片长 Prompt 的 Continuous Batching](../step10_chunked_prefill/README.md) 中，调度器持续把 waiting 队列的请求接入 running 队列。
 这里有一个根本性的问题：**生成长度在请求开始时是未知的**。
 
 系统无法预知一个请求会生成 5 个 token 还是 500 个 token。每接入一个新请求，
@@ -222,6 +222,6 @@ Preemption：KV Cache 满时优雅降级 vs 崩溃
 但 KV Cache 的管理方式还很粗糙：每个请求的 KV Cache 是一整块 Tensor，
 长度固定为序列当前长度，无法在多个请求之间共享相同的 prompt 前缀。
 
-**step12 将引入 PagedAttention**：把 KV Cache 切成固定大小的"页"（Page），
+**PagedAttention：分页内存管理 将引入 PagedAttention**：把 KV Cache 切成固定大小的"页"（Page），
 像操作系统管理虚拟内存一样管理显存，彻底解决内存碎片问题，
 并为 prefix caching（多个请求共享同一 system prompt 的 KV Cache）奠定基础。

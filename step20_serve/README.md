@@ -215,7 +215,7 @@ python run.py
 
 输出：
 ```
-step20: HTTP 服务封装（OpenAI 兼容接口）
+HTTP Serve：OpenAI 兼容推理服务: HTTP 服务封装（OpenAI 兼容接口）
 ==================================================
 server.py 语法检查通过 ✅
 FastAPI x.x.x / uvicorn 依赖可用 ✅

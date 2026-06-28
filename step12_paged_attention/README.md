@@ -167,12 +167,12 @@ token_count=9 时：
 
 ## ref_count：为什么引用计数？
 
-`Block` 对象上有 `ref_count` 字段，`free()` 是"减引用"而不是"直接回收"。目前 step12 里每个 Block 只被一个序列持有，`ref_count` 始终是 0 或 1，看起来多此一举。
+`Block` 对象上有 `ref_count` 字段，`free()` 是"减引用"而不是"直接回收"。目前 PagedAttention：分页内存管理 里每个 Block 只被一个序列持有，`ref_count` 始终是 0 或 1，看起来多此一举。
 
-这是为 **step13 的前缀缓存**预留的机制：
+这是为 **Prefix Caching：相同前缀只算一次 的前缀缓存**预留的机制：
 
 ```
-前缀共享场景（step13 会实现）：
+前缀共享场景（Prefix Caching：相同前缀只算一次 会实现）：
 
 系统提示词（System Prompt）："你是一个有帮助的AI助手..."
   → 对应 Block [0, 1, 2]（已计算并缓存）
@@ -247,7 +247,7 @@ flash_attn_with_kvcache(
 `block_table[block_idx] * block_size + slot_in_block` 计算物理地址，
 一次 kernel 调用完成对所有非连续 Block 的 attention 计算。
 
-把 block_table 真正接入 attention 需要 FlashAttention 的 PagedAttention 接口，将在 step16 引入。
+把 block_table 真正接入 attention 需要 FlashAttention 的 PagedAttention 接口，将在 FlashAttention：SRAM-aware 注意力计算 引入。
 
 ---
 
@@ -257,8 +257,8 @@ flash_attn_with_kvcache(
 step12_paged_attention/
   block_manager.py   ← BlockManager + Block，本步核心新增
   engine.py          ← PagedAttentionEngine，集成 BlockManager
-  scheduler.py       ← 复用 step09 的 Scheduler（无修改）
-  model.py           ← 复用 step07 的 TinyTransformerWithKVCache（无修改）
+  scheduler.py       ← 复用 Continuous Batching 调度器 的 Scheduler（无修改）
+  model.py           ← 复用 单请求 KV Cache 的 TinyTransformerWithKVCache（无修改）
   run.py             ← 演示 BlockManager 操作 + 利用率对比
 ```
 
@@ -325,11 +325,11 @@ python run.py
 
 ## 下一步
 
-step12 解决了单序列的显存碎片问题，但还有一类浪费没有处理：**相同前缀被重复计算**。
+PagedAttention：分页内存管理 解决了单序列的显存碎片问题，但还有一类浪费没有处理：**相同前缀被重复计算**。
 
 多个请求通常共享同一段系统提示词（System Prompt），每次请求都要重新计算这段 prompt 的 KV Cache，是纯粹的重复计算和显存重复占用。
 
-step13 将在 `ref_count` 机制的基础上，实现**前缀缓存（Prefix Caching）**：
+Prefix Caching：相同前缀只算一次 将在 `ref_count` 机制的基础上，实现**前缀缓存（Prefix Caching）**：
 - 对于内容相同的 Block，只保留一份物理拷贝
 - 通过 `ref_count` 让多个序列共享这些 Block
 - 新请求到来时，如果前缀已缓存，直接复用 block_table 中的物理 Block ID，跳过 prefill 计算
