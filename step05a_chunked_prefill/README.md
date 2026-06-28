@@ -145,12 +145,12 @@ seq.prefill_offset = end
 第一块 chunk 的 K/V 已经存在 `past_kv` 里，不需要重算。
 这和 Decode 阶段复用 KV Cache 的机制完全相同。
 
-### 教学版的局限：每个序列仍单独 forward
+### 教学版的设计选择：严格 1-chunk / 1-decode 交替
 
-`engine.py` 中，prefill 和 decode 的序列各自单独调用一次 `self.model()`：
+`engine.py` 每步只处理一块 prefill 和一个 decode，是**刻意为教学清晰度做出的设计选择**：
 
 ```python
-# engine.py — 教学版实现：一块 prefill → 一个 decode，严格交替
+# engine.py — 教学版：严格分时交替，逻辑一目了然
 prefill_chunk, decode_seq = scheduler.schedule()
 
 if prefill_chunk:
@@ -162,7 +162,7 @@ if decode_seq:
     self.model(seq.get_last_token(), ...)       # forward ②
 ```
 
-调度器 `schedule()` 每次只返回**一个**序列的一块 chunk，以及**一个** decode 序列（各自 `break` 后即返回），engine 的 while 循环自然变成严格的「一块 prefill → 一个 decode」交替：
+调度器每次只返回 1 个 prefill chunk 和 1 个 decode 序列，while 循环的每次迭代严格对应一个时间片：
 
 ```
 iteration 1: prefill seq_new chunk1 (50 tok) → decode A
@@ -174,14 +174,30 @@ iteration 6:                                 → decode A
 ...
 ```
 
-这样分时逻辑一目了然。代价是 decode 序列之间仍各自一次 forward，没有被 batch 合并——**真实 vLLM 的做法**是把所有 prefill chunk token 和所有 decode token 拼成一个 batch，**一次 forward** 处理完：
+这种写法的价值在于：**调度逻辑（`prefill_offset`、`chunk_size`、状态机）和执行逻辑完全对应，读代码时能直接看出每步在做什么**，不需要追踪 batch 拼接的下标管理。
+
+### 真实 vLLM 的做法：所有序列合并为一次 forward
+
+教学版每步有 2 次独立的 GPU forward（1 次 prefill + 1 次 decode），GPU 的矩阵乘法没有被 batch 利用。真实 vLLM 把所有 prefill chunk token 和**所有** decode token 拼成一个连续张量，**一次 forward** 处理完：
 
 ```
-[seq_new_chunk(50) | decode_A(1) | decode_B(1) | decode_C(1) | decode_D(1)]
-→ 一次 forward，一次矩阵乘法，GPU 利用率最高
+教学版（本章）：
+  forward ①: prefill chunk    [50 tokens]
+  forward ②: decode seq A     [1 token]
+  → 2 次 GPU kernel 调用，矩阵小，GPU 利用率低
+
+真实 vLLM：
+  一次 forward: [chunk(50) | decode_A(1) | decode_B(1) | ... | decode_H(1)]
+              = [58 tokens]  → 1 次 GPU kernel 调用，矩阵更大，GPU 利用率高
 ```
 
-这需要 FlashAttention varlen 接口（`cu_seqlens`）在一次 kernel 内处理不同长度的序列，将在 step09 引入。
+**为什么要这么做？**
+
+GPU 的矩阵乘法有固定的 kernel 启动开销（约 0.05ms/次）。decode 阶段每步每个序列只有 1 个 token，矩阵极小，计算量不足以填满 GPU——如果每个序列单独 forward，绝大多数时间都在 kernel 启动上浪费。把所有序列拼在一起，变成一个更大的矩阵，GPU 才能真正并行发力。
+
+**为什么需要 FlashAttention varlen？**
+
+各序列虽然 token 拼在一起，但注意力计算必须**各自独立**（prefill chunk 只能看自己的 token，decode_A 只能看自己的历史 KV）。FlashAttention 的 varlen 接口用 `cu_seqlens` 偏移量数组标记每个序列的边界，在一次 kernel 调用内完成所有序列的独立注意力计算，将在 step09 详细介绍。
 
 ### 关键参数
 
