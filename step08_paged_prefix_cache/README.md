@@ -148,6 +148,36 @@ self.kv_pool_k = torch.zeros(num_layers, total_blocks, block_size, num_heads, d_
 self.kv_pool_v = torch.zeros(num_layers, total_blocks, block_size, num_heads, d_head)
 ```
 
+### 为什么 kv_pool 的形状是 `[total_blocks, block_size, num_heads, d_head]`
+
+每个维度对应一个设计决策，从外到内：
+
+| 维度 | 含义 | 设计原因 |
+|------|------|---------|
+| `total_blocks` | 物理 Block 总数 | 类比 OS 的物理页帧池，用 `block_table` 做虚拟→物理映射，**打破 KV Cache 必须连续存储的假设** |
+| `block_size` | 每个 Block 存几个 token | 分配粒度的权衡：太小→碎片化开销大；太大→最后一个 Block 内部浪费多（internal fragmentation） |
+| `num_heads` | 注意力头数 | 每个 token 对每个头有独立的 K/V 向量，存储后可直接按 `[:, h, :]` 切头，无需 reshape |
+| `d_head` | 每个头的向量维度 | 实际的 K/V 数值，`d_head = d_model // num_heads` |
+
+写入时通过两步寻址定位槽位：
+
+```python
+block_idx     = pos // block_size   # 去哪个 block
+slot_in_block = pos % block_size    # block 内第几个槽
+kv_pool_k[physical_block, slot_in_block] = K[i]
+```
+
+**与旧的 `past_key_values` 对比：**
+
+| | past_key_values（step03~07）| kv_pool（step08）|
+|---|---|---|
+| 形状 | `[batch, num_heads, seq_len, d_head]` | `[total_blocks, block_size, num_heads, d_head]` |
+| 内存组织 | 按**序列**组织，每个序列独占连续显存 | 按**物理页**组织，所有序列共享同一物理池 |
+| 碎片 | 严重（序列长度各异） | 最多 1 个 Block 的内部碎片 |
+| prefix cache | 需要复制 Python 对象 | block_table 复用，**零拷贝** |
+
+本质上，这个形状是把「按序列组织」变成「按物理页组织」——和 OS 虚拟内存管理是同一个思路。
+
 **attention forward 的变化**：写入 + gather 替代 torch.cat
 
 ```python
