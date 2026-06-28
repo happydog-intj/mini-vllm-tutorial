@@ -99,14 +99,6 @@ for seq in prefill_seqs:
     seq.append_token(...)
 ```
 
-```diff
-- logits, seq.past_kv = model(seq.prompt)   # 整个 prompt 一次喂入，无法中断
-+ # step05a 的修改：改为分块 prefill
-+ chunk = seq.prompt[seq.prefill_offset : seq.prefill_offset + chunk_size]
-+ logits, seq.past_kv = model(chunk, past_kv=seq.past_kv)
-+ seq.prefill_offset += len(chunk)
-```
-
 如果 `seq.prompt` 有 4096 个 token，一次性 prefill 这一行就会执行 1300ms，
 期间所有 `decode_seqs` 都在等待。
 
@@ -133,6 +125,57 @@ chunk_size = 512 时，4096-token 的 Prefill 分 8 步完成：
 
 **Decode 请求的 TPOT 从「阻塞 1300ms」变成「每步多 20ms」。**
 
+## 实现细节
+
+每个 Sequence 新增 `prefill_offset` 字段，记录已处理了多少 prompt token：
+
+```python
+class Sequence:
+    prefill_offset: int = 0  # 已 prefill 的 token 数
+
+# 调度时：每步最多处理 chunk_size 个新 token
+start = seq.prefill_offset
+end = min(start + chunk_size, len(seq.prompt))
+chunk = seq.prompt[start:end]
+logits, seq.past_kv = model(chunk, past_kv=seq.past_kv)  # 增量 prefill
+seq.prefill_offset = end
+```
+
+注意：增量 prefill 依赖 KV Cache——第二块 chunk 处理时，
+第一块 chunk 的 K/V 已经存在 `past_kv` 里，不需要重算。
+这和 Decode 阶段复用 KV Cache 的机制完全相同。
+
+### 教学版的局限：每个序列仍单独 forward
+
+`engine.py` 中，prefill 和 decode 的序列各自单独调用一次 `self.model()`：
+
+```python
+# engine.py — 教学版实现
+for seq, start, end in prefill_chunks:
+    logits, seq.past_key_values = self.model(chunk, ...)   # 独立 forward ①
+
+for seq in decode_seqs:
+    logits, seq.past_key_values = self.model(seq.get_last_token(), ...)  # 独立 forward ②
+```
+
+如果有 1 个 prefill chunk + 8 个 decode 序列，这里会发起 **9 次独立的 GPU forward pass**，GPU 的矩阵乘法没有被 batch 利用，吞吐量与串行处理相同。
+
+**真实 vLLM 的做法**：把 prefill chunk 的所有 token 和全部 decode token 拼成一个序列，**一次 forward** 处理完：
+
+```
+prefill chunk（512 tok）+ decode_A（1 tok）+ ... + decode_H（1 tok）
+= [520 tokens] → 一次 forward pass，一次矩阵乘法
+```
+
+各序列的 token 虽然拼在一起，但注意力计算仍彼此独立——这正是 step09 FlashAttention varlen 接口（`cu_seqlens`）的用途：用偏移量数组告诉 GPU 每个序列的边界，在一次 kernel 调用内完成所有序列的独立注意力计算。
+
+本章教学版保留逐序列 forward 的写法，是为了让调度逻辑（`prefill_offset`、`chunk_size`、状态机）清晰可读，不被 batch 拼接的下标管理逻辑干扰。
+
+### 关键参数
+
+- `chunk_size`：每步最多处理的 prefill token 数（nano-vllm 默认 512）
+- `prefill_offset`：当前序列已完成 prefill 的 token 数
+
 ## 代价与权衡
 
 Chunked Prefill 不是免费的：
@@ -156,30 +199,6 @@ chunk_size 越大：
 
 nano-vllm 的默认 `chunk_size=512`，在 TTFT 和 TPOT 之间取了一个平衡点。
 
-## 实现细节
-
-每个 Sequence 新增 `prefill_offset` 字段，记录已处理了多少 prompt token：
-
-```python
-class Sequence:
-    prefill_offset: int = 0  # 已 prefill 的 token 数
-
-# 调度时：每步最多处理 chunk_size 个新 token
-start = seq.prefill_offset
-end = min(start + chunk_size, len(seq.prompt))
-chunk = seq.prompt[start:end]
-logits, seq.past_kv = model(chunk, past_kv=seq.past_kv)  # 增量 prefill
-seq.prefill_offset = end
-```
-
-注意：增量 prefill 依赖 KV Cache——第二块 chunk 处理时，
-第一块 chunk 的 K/V 已经存在 `past_kv` 里，不需要重算。
-这和 Decode 阶段复用 KV Cache 的机制完全相同。
-
-## 关键参数
-
-- `chunk_size`：每步最多处理的 prefill token 数（nano-vllm 默认 512）
-- `prefill_offset`：当前序列已完成 prefill 的 token 数
 
 ## 运行
 
