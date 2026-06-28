@@ -7,7 +7,7 @@ Chunked Prefill 如何通过分块混合调度解决这个问题。
 
 ## Prefill 和 Decode 的根本差异
 
-先回顾一下 step03a 引入的两个阶段：
+先回顾一下 [step03a](../step03a_kvcache_single/README.md) 引入的两个阶段：
 
 ```
 Prefill（处理 prompt）：
@@ -36,9 +36,9 @@ Decode：小矩阵 + 大 KV Cache 读取，GPU 的显存带宽是瓶颈
 这意味着：Prefill 和 Decode 不能简单地用「谁快谁慢」来比较——
 它们消耗的是 GPU 的不同资源。
 
-## 问题：长 Prefill 阻塞 Decode
+## 那么问题来了：长 Prefill任务一定会阻塞Decode任务
 
-step04 的 Continuous Batching 让短请求完成后立刻补充新请求，
+[step04 的 Continuous Batching](../step04_scheduler/README.md) 让短请求完成后立刻补充新请求，
 但有一个新问题：**新请求进来时需要先做 Prefill。**
 
 Prefill 的计算量随 prompt 长度的平方增长：
@@ -93,12 +93,21 @@ step04 解决了「短请求完成后槽位空转」的问题，
 step04 的 `scheduler.py` 里，`prefill_seqs` 的 prefill 是一次性完成的：
 
 ```python
+# step04/scheduler.py — 问题所在
 for seq in prefill_seqs:
     logits, seq.past_kv = model(seq.prompt)  # ← 整个 prompt 一次性 prefill
     seq.append_token(...)
 ```
 
-如果 `seq.prompt` 有 4096 个 token，这一行就会执行 1300ms，
+```diff
+- logits, seq.past_kv = model(seq.prompt)   # 整个 prompt 一次喂入，无法中断
++ # step05a 的修改：改为分块 prefill
++ chunk = seq.prompt[seq.prefill_offset : seq.prefill_offset + chunk_size]
++ logits, seq.past_kv = model(chunk, past_kv=seq.past_kv)
++ seq.prefill_offset += len(chunk)
+```
+
+如果 `seq.prompt` 有 4096 个 token，一次性 prefill 这一行就会执行 1300ms，
 期间所有 `decode_seqs` 都在等待。
 
 ## Chunked Prefill 的解决思路

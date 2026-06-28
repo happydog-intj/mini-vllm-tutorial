@@ -2,7 +2,7 @@
 
 ## 为什么需要抢占？
 
-在 step05a 的 Continuous Batching 中，调度器持续把 waiting 队列的请求接入 running 队列。
+在 [step05a 的 Continuous Batching](../step05a_chunked_prefill/README.md) 中，调度器持续把 waiting 队列的请求接入 running 队列。
 这里有一个根本性的问题：**生成长度在请求开始时是未知的**。
 
 系统无法预知一个请求会生成 5 个 token 还是 500 个 token。每接入一个新请求，
