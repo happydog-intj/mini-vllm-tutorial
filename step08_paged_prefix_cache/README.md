@@ -33,24 +33,24 @@ step07 缓存的是 Python 对象（`past_key_values` tuple），每个请求命
 正确做法是**在 prefill 过程中**，每处理完一个完整 Block 就立即保存快照：
 
 ```python
-past_kv = cached_kv   # 从命中的断点开始（或 None）
-pos = cached_len
+# block_table 已提前分配好（命中的 cached_block_ids + 新分配的 block）
+pos = cached_len   # 从命中断点继续（未命中则从 0 开始）
 
 while pos < prompt_len:
     end = min(pos + block_size, prompt_len)
     chunk = prompt_ids[pos:end]
-    logits, past_kv = model(chunk, past_key_values=past_kv)
+    logits = model(chunk, block_table=block_table, start_pos=pos)
+    # ↑ model 内部把 chunk 的 K/V 写入 kv_pool[block_table[...]]
     pos = end
 
-    # 只在完整 Block 边界处缓存
+    # 只在完整 Block 边界处缓存 block_id 列表快照
     if pos % block_size == 0:
         h = chain_hash(tokens, prev_hash, pos - block_size, pos)
         if h not in prefix_cache:
-            blk = block_manager.allocate(1)
+            prefix_block_ids = block_table[:pos // block_size]  # 前 pos 个 token 的物理 Block
             prefix_cache[h] = {
-                "block_id": blk[0],
-                "past_kv":  past_kv,   # ← 正确：此时只含前 pos 个 token 的信息
-                "length":   pos,
+                "block_ids": list(prefix_block_ids),  # ← 缓存 block_id 列表，不是 past_kv
+                "length":    pos,
             }
         prev_hash = h
 ```
