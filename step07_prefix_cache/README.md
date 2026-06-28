@@ -313,8 +313,64 @@ Prefix Caching：系统提示词场景
 | 驱逐策略 | 无（永不驱逐） | LRU + ref_count |
 | 跨请求共享 | 同进程内字典 | 统一的 Block 池，多请求共享物理 Block |
 | 哈希算法 | 链式 xxhash64 | 链式 xxhash（相同思路） |
+| 缓存存储位置 | 整段 KV，含完整 prompt 后的状态 | 逐 Block 增量 prefill，边界处快照 |
+| 批处理 | 串行逐条处理 | 未命中部分合并成 batch 一起 prefill |
 
 本步省略了 Block 池和驱逐机制，专注于展示**链式 hash + KV 复用**的核心逻辑。
+
+### 教学版的四个主要局限
+
+**1. 缓存永不驱逐，显存无限增长**
+
+```python
+self._prefix_kv_cache: Dict[int, object] = {}  # 只增不减，显存持续累积
+```
+
+真实 vLLM 使用 **LRU + ref_count**：引用计数归零且最久未使用的 Block 优先被驱逐，腾出空间给新请求。
+
+**2. 缓存存的是 Python 对象，不是 Block 粒度**
+
+```python
+self._prefix_kv_cache[h] = past_kv  # 整段 KV tuple，不是单个 Block
+```
+
+缓存的是整个 `past_key_values` tuple，无法跨请求共享物理显存。真实 vLLM 以 **Block 为单位**缓存，多个请求命中同一个 Block 时，物理显存只存一份，通过 ref_count 管理生命周期。
+
+**3. 缓存存储了错误位置的 KV 快照**
+
+```python
+# prompt 跑完整之后才缓存各个 block 边界
+for end in range(self.block_size, prompt_len + 1, self.block_size):
+    h = self._compute_hash(tokens, end)
+    if h not in self._prefix_kv_cache:
+        self._prefix_kv_cache[h] = past_kv  # ← 存的是完整 prompt 跑完后的 past_kv
+                                             #   不是前 end 个 token 的状态！
+```
+
+`past_kv` 包含了整个 prompt 的所有 token 信息，而不是前 `end` 个 token 的 KV 快照。在 toy model 上碰巧能跑通，但在真实模型上会产生错误输出。
+
+正确做法是：对 prompt **逐 block 增量 prefill**，在每个 block 边界处保存当时的 KV 快照：
+
+```python
+# 正确做法：逐 block prefill，边界处截取快照
+past_kv = None
+for start in range(0, prompt_len, block_size):
+    end = min(start + block_size, prompt_len)
+    chunk = prompt_ids[start:end]
+    logits, past_kv = model(chunk, past_key_values=past_kv)
+    if end % block_size == 0:                      # 恰好在 block 边界
+        h = compute_hash(tokens, end)
+        prefix_cache[h] = past_kv                  # ← 此时 past_kv 只含前 end 个 token
+```
+
+**4. 串行处理，没有批处理**
+
+```python
+def generate_batch(self, requests):
+    return [self._generate_one(p, n) for p, n in requests]  # 逐条串行
+```
+
+真实 vLLM 把所有请求缓存未命中的 token 合并成一个 batch，一次 prefill forward 处理完，GPU 利用率大幅提升。
 
 ## 下一步
 
