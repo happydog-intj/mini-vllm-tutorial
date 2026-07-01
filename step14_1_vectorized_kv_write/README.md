@@ -135,7 +135,92 @@ CUDA 在 GPU 上并行执行所有写入
 
 对比原来的 Python 循环：每次 `kv_pool_k[physical_block, slot_in_block] = K[i]` 都是一次独立的 CUDA kernel launch，`seq_len` 次循环就是 `seq_len` 次 launch，每次 launch 有固定的 CPU→GPU 调度开销（约 5~20μs），这些开销全部叠加。
 
-## 与 vLLM 的对比
+## 为什么 Advanced Indexing 比 Python 循环快？
+
+### Python 循环的完整代价
+
+```python
+for i in range(seq_len):
+    kv_pool_k[physical_block, slot_in_block] = K[i]  # 每次都走完整链路
+```
+
+每次赋值的执行路径：
+
+```
+Python 字节码解释
+    → PyObject 引用计数
+    → PyTorch Python binding（pybind11）
+    → C++ tensor index 解析
+    → CUDA kernel launch（固定开销约 5~20μs）
+    → GPU 执行（只写 1 个元素，几纳秒）
+    → 返回 Python
+```
+
+`seq_len=512` 时，这条路径走 512 次。每次 kernel launch 的固定开销远大于 GPU 实际写入的时间——CPU 在忙着调度，GPU 大部分时间在等。
+
+### Advanced Indexing 的执行路径
+
+```python
+kv_pool_k[physical_blocks, slot_indices] = K
+```
+
+```
+Python 字节码解释（1次）
+    → PyTorch Python binding（1次）
+    → C++ 构造 IndexPutOp（1次）
+    → 一次 CUDA kernel launch
+    → GPU 上 seq_len 个线程并行执行写入
+```
+
+**不管 seq_len 是 1 还是 10000，Python→CUDA 的通道只走一次。**
+
+### GPU kernel 内部的并行
+
+CUDA kernel launch 后，GPU 把任务分配给大量 CUDA core 同时执行：
+
+```
+thread 0: kv_pool_k[physical_blocks[0], slot_indices[0]] = K[0]
+thread 1: kv_pool_k[physical_blocks[1], slot_indices[1]] = K[1]
+thread 2: kv_pool_k[physical_blocks[2], slot_indices[2]] = K[2]
+...
+thread N: kv_pool_k[physical_blocks[N], slot_indices[N]] = K[N]
+```
+
+所有线程同时执行，没有串行依赖（每个写入目标地址独立）。
+
+### 底层 CUDA 原语：scatter
+
+Advanced Indexing 的写入本质是 **scatter** 操作：
+
+```
+scatter(dst, index, src):
+    dst[index[i]] = src[i]   ← 对所有 i 并行执行
+```
+
+PyTorch 的 `tensor[idx] = val` 底层调用 `at::_index_put_impl_`，最终映射到高度优化的 CUDA scatter kernel。
+
+### 为什么必须把 block_table 转成 tensor？
+
+```python
+bt = torch.tensor(block_table, device=K.device)   # ← 必须转
+physical_blocks = bt[block_indices]                # tensor[tensor] → GPU 上执行
+```
+
+`block_table` 是 Python `List[int]`。用 list 索引 tensor 时，PyTorch 无法确认数据在哪个设备，可能触发 CPU↔GPU 同步（极慢）。转成 tensor 后，PyTorch 确认索引和数据都在 GPU，整个操作在 GPU 上完成，不回 CPU。
+
+### 性能对比
+
+| | Python for 循环 | Advanced Indexing |
+|---|---|---|
+| Python→CUDA launch 次数 | seq_len 次 | 1 次 |
+| GPU 线程利用 | 每次只用 1 个 thread | seq_len 个 thread 并行 |
+| 固定 launch 开销 | seq_len × 5~20μs | 1 × 5~20μs |
+| GPU 实际执行 | 串行，seq_len 倍时间 | 并行，约等于单次 |
+| seq_len=512 时节省 | — | ~511 次 launch 开销 + 并行加速 |
+
+一句话：**Python 循环在 CPU 上串行决策，Advanced Indexing 把决策权交给 GPU，让硬件用几千个 core 同时完成所有写入。**
+
+
 
 | | step14 | step14_1 | vLLM (nano-vllm) |
 |---|---|---|---|
