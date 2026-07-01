@@ -41,24 +41,33 @@ def scaled_dot_product_attention(
     # Step 1: 计算相似度分数
     # Q·Kᵀ 的每个元素 scores[i,j] = Q[i] 与 K[j] 的点积
     # 除以 √d_head 防止点积过大导致 softmax 梯度消失
+    print("scaled_dot_product_attention: 计算 Q·Kᵀ / √d_head")
+    print(f"Q=\n {Q}")
+    print(f"Kᵀ=\n {K.transpose(-2, -1)}")
+    print(f"V=\n {V}")
     scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_head)
+    print(f"scaled_dot_product_attention scores----:\n {scores}")
     # scores: [seq_len, seq_len]
 
     # Step 2: 应用因果（causal）mask
     # 生成时 token i 不能看到 token j>i（未来），否则模型会"作弊"
     if causal:
         seq_len = Q.size(0)
+        print(f"scaled_dot_product_attention causal mask applied. seq_len={seq_len}")
         # tril：下三角矩阵（包含对角线），上三角置为 -inf
         mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
         scores = scores.masked_fill(mask, float("-inf"))
+        print(f"scaled_dot_product_attention causal mask applied. scores+++++:\n {scores}")
 
     # Step 3: softmax 得到归一化的注意力权重
     # 每行的权重和为 1
     weights = torch.softmax(scores, dim=-1)
+    print(f"scaled_dot_product_attention weights:\n {weights}")
 
     # Step 4: 用权重对 V 加权求和
     # output[i] = Σ_j weights[i,j] * V[j]
     output = torch.matmul(weights, V)
+    print(f"scaled_dot_product_attention output:\n {output}")
 
     return output, weights
 
@@ -114,10 +123,11 @@ class MultiHeadAttention(nn.Module):
         for h in range(self.num_heads):
             out_h, _ = scaled_dot_product_attention(Q[h], K[h], V[h], causal=True)
             outputs.append(out_h)  # [seq_len, d_head]
-
+        print(f"MultiHeadAttention outputs:\n {outputs}")
         # Step 4: 拼接多头输出
         # [num_heads, seq_len, d_head] → [seq_len, num_heads*d_head] = [seq_len, d_model]
         concat = torch.cat(outputs, dim=-1)  # [seq_len, d_model]
+        print(f"MultiHeadAttention concat:\n {concat}")
 
         # Step 5: 输出投影
         return self.W_o(concat)

@@ -4,14 +4,17 @@ from engine import NaiveEngine
 
 def main():
     torch.manual_seed(42)
-    engine = NaiveEngine(vocab_size=256, d_model=512, num_heads=8, num_layers=6)
+    # engine = NaiveEngine(vocab_size=256, d_model=512, num_heads=8, num_layers=6)
+    engine = NaiveEngine(vocab_size=256, d_model=4, num_heads=1, num_layers=1)
 
     print("=" * 50)
     print("朴素自回归推理 — 速度随序列长度下降")
     print("=" * 50)
 
-    prompt_ids = torch.tensor([72, 101, 108, 108, 111])  # "Hello"
-    max_steps = 200
+    # prompt_ids = torch.tensor([72, 101, 108, 108, 111])  # "Hello"
+    prompt_ids = torch.tensor([72])  # "Hello"
+    # max_steps = 200
+    max_steps = 4
     times = []
 
     input_ids = prompt_ids.clone()

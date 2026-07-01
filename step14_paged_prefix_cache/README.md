@@ -282,26 +282,26 @@ python run.py
 
 ## 下一步：step16_x 系列优化
 
-本章实现已经接近真实 vLLM 的设计，但仍有 7 处性能问题和设计不一致。`step16_1` ~ `step16_7` 逐一修复：
+本章实现已经接近真实 vLLM 的设计，但仍有 7 处性能问题和设计不一致。`step14_1` ~ `step14_7` 逐一修复：
 
 ### 性能问题（model.py）
 
 | 子章节 | 问题 | 解决方案 |
 |--------|------|---------|
-| `step16_1` | KV 写入：`seq_len` 次 Python 循环，每次一个 scalar write | 预计算物理槽位索引，一次 advanced indexing scatter |
-| `step16_2` | KV gather：`num_blocks` 次 Python 循环 + `torch.cat` | 构造扁平索引，一次 advanced indexing gather |
-| `step16_3` | Attention：`num_heads` 次循环，每次独立 matmul | batch matmul（bmm），一次处理所有 head |
-| `step16_4` | Causal mask：`seq_len` 次 Python 循环逐行构造 | broadcast 比较一次生成；decode 时（seq_len=1）直接跳过 |
+| `step14_1` | KV 写入：`seq_len` 次 Python 循环，每次一个 scalar write | 预计算物理槽位索引，一次 advanced indexing scatter |
+| `step14_2` | KV gather：`num_blocks` 次 Python 循环 + `torch.cat` | 构造扁平索引，一次 advanced indexing gather |
+| `step14_3` | Attention：`num_heads` 次循环，每次独立 matmul | batch matmul（bmm），一次处理所有 head |
+| `step14_4` | Causal mask：`seq_len` 次 Python 循环逐行构造 | broadcast 比较一次生成；decode 时（seq_len=1）直接跳过 |
 
 ### 设计不一致（engine / block_manager）
 
 | 子章节 | 问题 | 解决方案 |
 |--------|------|---------|
-| `step16_5` | `_lookup_prefix_cache` 每次请求都重算整个 prompt 的 hash 链 | hash 状态维护在 Sequence 上，prefill 过程中增量更新 |
-| `step16_6` | `_free_seq` 直接操作 `block_manager._blocks[bid].ref_count` | 新增 `BlockManager.release()`，与 `retain()` 对称，engine 不再直接接触内部状态 |
-| `step16_7` | 每个序列独立一次 `model()` forward，GPU 无批处理并行度 | `forward_batched`：所有序列 token 拼成 flat batch，Linear 层一次处理 `[total_tokens, d_model]` |
+| `step14_5` | `_lookup_prefix_cache` 每次请求都重算整个 prompt 的 hash 链 | hash 状态维护在 Sequence 上，prefill 过程中增量更新 |
+| `step14_6` | `_free_seq` 直接操作 `block_manager._blocks[bid].ref_count` | 新增 `BlockManager.release()`，与 `retain()` 对称，engine 不再直接接触内部状态 |
+| `step14_7` | 每个序列独立一次 `model()` forward，GPU 无批处理并行度 | `forward_batched`：所有序列 token 拼成 flat batch，Linear 层一次处理 `[total_tokens, d_model]` |
 
-每章在上一章基础上累积，`step16_7` 包含全部 7 项优化。
+每章在上一章基础上累积，`step14_7` 包含全部 7 项优化。
 
 ## 真实模型：加载 Qwen3-0.6B
 

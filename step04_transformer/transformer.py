@@ -79,6 +79,7 @@ class TransformerDecoderLayer(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         # Pre-Norm + 残差：先 Norm，做变换，加回原始 x
+        print(f"x:{x}")
         x = x + self.attn(self.norm1(x))   # 注意力子层
         x = x + self.mlp(self.norm2(x))    # MLP 子层
         return x

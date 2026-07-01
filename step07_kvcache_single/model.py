@@ -72,9 +72,11 @@ class MultiHeadAttentionWithKVCache(nn.Module):
             q_h = Q[:, h, :]       # [seq_len, d_head]
             k_h = K_full[:, h, :]  # [total_len, d_head]
             v_h = V_full[:, h, :]
+            print(f"Head\n {h}: q_h=\n{q_h}, k_h=\n{k_h}, v_h=\n{v_h}")
 
             scores = torch.matmul(q_h, k_h.T) / math.sqrt(self.d_head)
             # [seq_len, total_len]
+            print(f"Head {h}: scores=\n{scores}")
 
             # 因果 mask
             past_len = total_len - seq_len
@@ -82,7 +84,7 @@ class MultiHeadAttentionWithKVCache(nn.Module):
             for i in range(seq_len):
                 mask[i, :past_len + i + 1] = False
             scores = scores.masked_fill(mask, float("-inf"))
-
+            print(f"Head {h}: masked scores=\n{scores}")
             weights = torch.softmax(scores, dim=-1)
             out_h = torch.matmul(weights, v_h)
             outputs.append(out_h)
@@ -105,6 +107,7 @@ class TransformerDecoderLayerWithKV(nn.Module):
         x: Tensor,
         past_kv: Optional[KVCache] = None,
     ) -> Tuple[Tensor, KVCache]:
+        print(f"x:{x}")
         attn_out, new_kv = self.attn(self.norm1(x), past_kv)
         x = x + attn_out
         x = x + self.mlp(self.norm2(x))
@@ -122,9 +125,9 @@ class TinyTransformerWithKVCache(nn.Module):
     def __init__(
         self,
         vocab_size: int = 256,
-        d_model: int = 128,
-        num_heads: int = 4,
-        num_layers: int = 2,
+        d_model: int = 4,#128,
+        num_heads: int = 1,#4,
+        num_layers: int = 1,#2,
     ):
         super().__init__()
         d_ff = d_model * 4

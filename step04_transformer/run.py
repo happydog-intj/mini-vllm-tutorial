@@ -3,13 +3,15 @@ from transformer import TinyTransformer
 
 def main():
     torch.manual_seed(42)
-    vocab_size, d_model, num_heads, num_layers = 256, 128, 4, 2
+    # vocab_size, d_model, num_heads, num_layers = 256, 128, 4, 2
+    vocab_size, d_model, num_heads, num_layers = 256, 128, 1, 1
 
     model = TinyTransformer(vocab_size, d_model, num_heads, num_layers)
     param_count = sum(p.numel() for p in model.parameters())
 
     # 验证前向传播
-    seq_len = 10
+    # seq_len = 10
+    seq_len = 1
     token_ids = torch.randint(0, vocab_size, (seq_len,))
     logits = model(token_ids)
 
