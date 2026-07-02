@@ -1,4 +1,4 @@
-# step14_4 — torch.tril causal mask：消除逐行 Python 循环
+# step14_4 — Causal Mask 优化：broadcast 构造 + decode 阶段直接跳过
 
 ## 问题
 

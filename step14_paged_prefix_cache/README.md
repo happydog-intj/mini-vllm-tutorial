@@ -280,7 +280,7 @@ python run.py
 
 第一轮命中率 90% 而非 0% 的原因：第一个请求 miss 后把共享前缀存入缓存，第 2~10 个请求全部命中。
 
-## 下一步：step16_x 系列优化
+## 下一步：step14_x 系列优化
 
 本章实现已经接近真实 vLLM 的设计，但仍有 7 处性能问题和设计不一致。`step14_1` ~ `step14_7` 逐一修复：
 
@@ -302,7 +302,3 @@ python run.py
 | `step14_7` | 每个序列独立一次 `model()` forward，GPU 无批处理并行度 | `forward_batched`：所有序列 token 拼成 flat batch，Linear 层一次处理 `[total_tokens, d_model]` |
 
 每章在上一章基础上累积，`step14_7` 包含全部 7 项优化。
-
-## 真实模型：加载 Qwen3-0.6B
-
-将加载**真实的 Qwen3-0.6B 模型**，替换本教程一直使用的 TinyTransformer，验证以上所有优化在真实模型上同样成立。

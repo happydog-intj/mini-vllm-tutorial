@@ -77,7 +77,7 @@ def main():
         assert blk.ref_count >= 0, f"Block {blk.block_id} ref_count 异常: {blk.ref_count}"
     print(f"  所有 Block ref_count 正常 ✅")
 
-    print("\n✅ step14_4_tril_causal_mask 通过")
+    print("\n✅ step14_4_causal_mask_opt 通过")
 
 
 if __name__ == "__main__":
