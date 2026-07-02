@@ -109,10 +109,21 @@ class PagedMultiHeadAttention(nn.Module):
             # decode：当前 token 可以 attend 到所有历史，mask 全为 False
             weights = torch.softmax(scores, dim=-1)
         else:
-            # prefill：broadcast 构造 causal mask，无 Python 循环
+            # prefill：两种等价实现，效果完全相同
+
+            # 方式 1：torch.tril（下三角矩阵）
+            #   先生成 [total_len, total_len] 的全 True 矩阵，tril 取下三角（允许 attend 的位置）
+            #   再取 query 对应的行，True=允许, False=屏蔽，逻辑取反得到 mask
+            # full = torch.ones(total_len, total_len, dtype=torch.bool, device=x.device)
+            # allow = torch.tril(full, diagonal=0)[start_pos:start_pos+seq_len, :]
+            # causal_mask = ~allow  # True=需要屏蔽
+
+            # 方式 2：broadcast 比较（本章采用，更直接）
+            #   对位置 (i, j)，当 j > start_pos + i 时屏蔽（未来位置）
             q_idx = torch.arange(seq_len, device=x.device).unsqueeze(1)    # [seq_len, 1]
             k_idx = torch.arange(total_len, device=x.device).unsqueeze(0)  # [1, total_len]
             causal_mask = (k_idx > (start_pos + q_idx)).unsqueeze(0)       # [1, seq_len, total_len]
+
             scores = scores.masked_fill(causal_mask, float("-inf"))
             weights = torch.softmax(scores, dim=-1)
         out = torch.bmm(weights, V_t)                                   # [num_heads, seq_len, d_head]

@@ -45,6 +45,67 @@ else:
     weights = torch.softmax(scores, dim=-1)
 ```
 
+## torch.tril 介绍
+
+`torch.tril(input, diagonal=0)` 取矩阵的**下三角部分**（含对角线），上三角置零：
+
+```python
+x = torch.ones(4, 4)
+torch.tril(x)
+# tensor([[1, 0, 0, 0],
+#         [1, 1, 0, 0],
+#         [1, 1, 1, 0],
+#         [1, 1, 1, 1]])
+```
+
+下三角矩阵天然对应因果掩码的语义：位置 `i` 只能看到位置 `0..i`（即第 `i` 行的前 `i+1` 列）。
+
+## 两种等价实现
+
+### 方式 1：torch.tril
+
+```python
+full  = torch.ones(total_len, total_len, dtype=torch.bool, device=x.device)
+allow = torch.tril(full, diagonal=0)          # [total_len, total_len]，下三角为 True
+allow = allow[start_pos:start_pos + seq_len]  # [seq_len, total_len]，只取 query 对应的行
+causal_mask = ~allow                          # True=需要屏蔽
+```
+
+可视化（total_len=4，start_pos=0，seq_len=4）：
+
+```
+allow（可以 attend 的位置）:      causal_mask（需要屏蔽）:
+T F F F                           F T T T
+T T F F                           F F T T
+T T T F                           F F F T
+T T T T                           F F F F
+```
+
+**局限**：先分配 `[total_len, total_len]` 的完整矩阵再切片，decode 时 total_len 很大但只用 1 行，有浪费。
+
+### 方式 2：broadcast 比较（本章采用）
+
+直接生成 `[seq_len, total_len]`，无多余分配：
+
+```python
+q_idx = torch.arange(seq_len, device=x.device).unsqueeze(1)    # [seq_len, 1]
+k_idx = torch.arange(total_len, device=x.device).unsqueeze(0)  # [1, total_len]
+causal_mask = k_idx > (start_pos + q_idx)                       # [seq_len, total_len]
+```
+
+位置 `(i, j)` 的值为 `j > start_pos + i`：key 在 query 的未来则为 True（屏蔽）。
+
+**优势**：直接生成目标大小，decode（seq_len=1）时可完全跳过。
+
+### 对比
+
+| | torch.tril | broadcast 比较 |
+|---|---|---|
+| 中间分配大小 | `[total_len, total_len]` | `[seq_len, total_len]`（直接目标大小）|
+| decode（seq_len=1）| 仍需分配和切片 | 直接跳过整个操作 |
+| 代码可读性 | 直观（下三角=因果）| 需理解 broadcast |
+| 适用场景 | prefill | prefill + decode 均适用 |
+
 ## Python 循环次数对比
 
 | | Paged Prefix Cache | step14_4 |
