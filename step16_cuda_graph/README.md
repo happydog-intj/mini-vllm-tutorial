@@ -1,8 +1,45 @@
 # Step 16: CUDA Graph — 消除 Decode 阶段的调度开销
 
-## 本节目标
+## OS 类比：批处理 vs 直接执行
 
-理解 CUDA Graph 的工作原理，学习如何用它消除 decode 阶段每步推理的 Python 调度开销，并理解为什么这个优化只对 decode 有效、对 prefill 无效。
+CUDA Graph 解决的问题，在操作系统里有一个经典的对应：**系统调用开销**。
+
+每次用户程序调用 `read()`、`write()` 这类系统调用时，都要经历：
+
+```
+用户态代码
+    ↓ 陷入内核（syscall）
+内核处理请求
+    ↓ 返回用户态
+用户态继续
+```
+
+这个用户态 → 内核 → 用户态的来回本身有固定开销（约 1~10μs）。如果程序每次只读 1 个字节就 syscall 一次，大部分时间都花在切换上，而不是真正的 I/O。
+
+操作系统的解决方案是 **io_uring**（Linux 5.1+）：
+
+```
+传统方式（每次 I/O 一次 syscall）：
+  read() → syscall → read() → syscall → read() → syscall ...
+  大量时间花在用户/内核态切换
+
+io_uring（批量提交）：
+  把 N 个 I/O 请求写入共享内存的 submission queue
+  一次 syscall 批量提交 → 内核批量执行 → 结果写回 completion queue
+  切换次数从 N 次降为 1 次
+```
+
+**CUDA Graph 做的是完全一样的事，只是换了一层**：
+
+| | io_uring | CUDA Graph |
+|---|---|---|
+| 问题 | 每次 I/O 都有 syscall 开销 | 每次 kernel 都有 CPU 调度开销 |
+| 解决方案 | 把 I/O 操作写入 submission queue，批量提交 | 把 kernel launch 序列录制成图，一次提交 |
+| 节省的开销 | 用户/内核态切换 | Python → PyTorch → CUDA driver 链路 |
+| 适用场景 | I/O 密集型小请求 | Decode（每步只有 1 个 token，计算极小）|
+| 不适用场景 | 大块 I/O（本身开销相对小）| Prefill（计算量大，launch 开销占比小）|
+
+另一个更直接的类比是 **DMA（直接内存访问）**：CPU 配置一次 DMA 传输参数后，硬件独立搬运数据，CPU 不再逐字节介入——GPU replay CUDA Graph 时，CPU 提交一次图之后，GPU 按录制的顺序独立执行所有 kernel，CPU 不再逐 kernel 介入。
 
 ---
 
