@@ -238,19 +238,61 @@ padding 后全部补到 256：
 
 ### kernel 内部执行流程
 
-```
-输入：q/k/v [total_tokens, H, d]，cu_seqlens [0, 8, 264, 296]
+首先理解「为什么是在 kernel 内部执行」：
 
-for i in range(batch_size):          ← 每个序列独立处理
-    q_i = q[cu_seqlens[i]:cu_seqlens[i+1]]   # 切片，无拷贝
-    k_i = k[cu_seqlens[i]:cu_seqlens[i+1]]
-    v_i = v[cu_seqlens[i]:cu_seqlens[i+1]]
+**Python 调用 → CUDA kernel 的边界**
 
-    # 对 q_i, k_i, v_i 执行标准 FlashAttention 分块算法：
-    # 把 q_i 切成 Br 行的块，k_i/v_i 切成 Bc 列的块
-    # 全部在 SRAM 内完成，不写回 HBM
-    output[cu_seqlens[i]:cu_seqlens[i+1]] = flash_attn(q_i, k_i, v_i)
 ```
+Python：flash_attn_varlen_func(q, k, v, cu_seqlens_q, ...)
+                    ↓ 一次 Python → C++ → CUDA 调用
+CUDA kernel 启动（1 次 launch）
+                    ↓ 以下全部在 GPU 上执行，CPU 不参与
+    GPU 有数千个 CUDA core，同时处理所有 block
+                    ↓
+返回 output tensor 到 Python
+```
+
+一旦 kernel 启动，CPU 就不参与了。所有的循环、分块、矩阵乘法都在 GPU 上的 CUDA core 里执行，用的是 GPU 的 SRAM（片上缓存）和寄存器，不回 CPU，不经过 Python 解释器。
+
+**kernel 内部的两层并行**：
+
+```
+第 1 层：序列级并行
+  不同序列分配给不同的 CUDA Thread Block
+  序列A 和 序列B 在 GPU 上同时处理
+
+第 2 层：块级并行（FlashAttention tiling）
+  每条序列内部，Q 的不同 tile（行块）分配给不同的 Warp
+  同一序列的不同 Q tile 也在 GPU 上并行处理
+```
+
+**伪代码（对应 GPU 上真实执行逻辑）**：
+
+```
+# 每个 CUDA Thread Block 处理一条序列的一个 Q tile
+# GPU 同时启动 (batch_size × num_q_tiles) 个 Thread Block
+
+thread_block_i_j:                   # 序列 i，Q 的第 j 个 tile
+    q_tile = q[cu_seqlens[i] + j*Br : cu_seqlens[i] + (j+1)*Br]  # 从 HBM 读一次
+    # 加载到 SRAM（片上缓存，速度是 HBM 的 10×）
+
+    m = -inf    # online softmax 的最大值（维护在寄存器里）
+    acc = 0     # 累积输出（维护在寄存器里）
+
+    for k_tile in k[cu_seqlens[i] : cu_seqlens[i+1]]:  # 遍历所有 K tile
+        k_block = load_to_sram(k_tile)   # 从 HBM 读一次
+        v_block = load_to_sram(v_tile)   # 从 HBM 读一次
+
+        s = q_tile @ k_block.T           # 在 SRAM 内计算，不写 HBM
+        m_new = max(m, row_max(s))       # 更新 online softmax 状态
+        acc = acc * exp(m - m_new) + softmax(s) @ v_block  # 累积
+        m = m_new
+
+    output_tile = acc / normalizer       # 最终结果
+    write_to_HBM(output_tile)           # 只写一次 HBM
+```
+
+**关键**：`QK^T` 的中间结果（完整的 score 矩阵）**从未写回 HBM**，全程在 SRAM 里处理完就丢弃。这就是 HBM 读写从 O(N²) 降到 O(N) 的根本原因。
 
 注意：这个循环在 GPU kernel 内部展开，不是 Python 循环——所有序列在 GPU 上并行处理。
 
@@ -322,24 +364,50 @@ output = flash_attn_with_kvcache(
 
 **kernel 内部执行流程**：
 
-```
-for 序列 i:
-    q_i = q[i, 0]    # 当前新 token 的 Q，[num_heads, d_head]
+同样地，`flash_attn_with_kvcache` 也是一次 kernel launch，CPU 不参与内部循环：
 
-    # 按 block_table[i] 遍历所有物理 block
-    for block_idx in range(num_blocks_i):
+```
+Python：flash_attn_with_kvcache(q, k_cache, v_cache, block_table, ...)
+                    ↓ 一次 launch
+CUDA kernel 启动
+                    ↓ 以下全部在 GPU 上执行
+    每个 Thread Block 负责一条序列的输出
+```
+
+**伪代码（对应 GPU 上真实执行逻辑）**：
+
+```
+# 每个 CUDA Thread Block 处理一条序列（batch 里的第 i 条）
+thread_block_i:
+    q_i = q[i, 0]          # decode：1 个新 token 的 Q，从 HBM 读一次
+                            # 加载到 SRAM
+
+    m = -inf               # online softmax 状态（在寄存器里）
+    acc = 0
+
+    # 遍历该序列在 KV Cache 里的所有物理 block
+    for block_idx in range(cache_seqlens[i] // block_size + 1):
         physical_block = block_table[i, block_idx]
-        k_block = k_cache[physical_block]  # [block_size, num_kv_heads, d_head]
-        v_block = v_cache[physical_block]
 
-        # 在 SRAM 内完成这个 block 的 attention score 累积
-        # 使用 online softmax 跨 block 维护归一化状态
-        accumulate_attention(q_i, k_block, v_block)
+        # 直接从分页 KV pool 按物理地址读取（无需 gather 到连续内存）
+        k_block = k_cache[physical_block]   # [block_size, kv_heads, d_head]，从 HBM 读一次
+        v_block = v_cache[physical_block]   # 同上
+        # 加载到 SRAM
 
-    output[i] = finalize()
+        # 在 SRAM 内完成 attention score 累积（中间结果不写回 HBM）
+        s = q_i @ k_block.T                 # [1, block_size]
+        m_new = max(m, max(s))
+        acc = acc * exp(m - m_new) + softmax(s) @ v_block
+        m = m_new
+
+    output[i, 0] = acc / normalizer         # 只写一次 HBM
 ```
 
-**不需要先把 KV 从 paged memory gather 到连续内存**——kernel 直接按 block_table 访问物理 block，消除了之前的 gather 步骤。这就是 step14_2 中 `gather_kv_from_blocks` 在真实 vLLM 里被完全消除的原因。
+**为什么可以直接按 `block_table` 访问 paged KV Cache？**
+
+CUDA kernel 可以拿到任意 GPU 显存地址并直接读取，`block_table[i, block_idx]` 给出物理 block ID，kernel 用它计算出 `k_cache` 里的偏移量，直接寻址——不需要先把散落的 block gather 成连续内存，省去了整个 gather 步骤。
+
+这就是 step14_2 中 `gather_kv_from_blocks` 在真实 vLLM 里被完全消除的原因。
 
 ### 与 step14 系列的对比
 
