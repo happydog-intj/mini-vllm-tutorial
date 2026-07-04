@@ -41,7 +41,7 @@ Phase 7 — 高级优化
 
 Phase 8 — 工程化
   step18_benchmark       ← 吞吐量/延迟测量
-  step19_serve           ← OpenAI 兼容 HTTP 服务
+  step20_serve           ← OpenAI 兼容 HTTP 服务
 ```
 
 ## 快速开始

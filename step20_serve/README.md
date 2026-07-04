@@ -220,7 +220,7 @@ HTTP Serve：OpenAI 兼容推理服务: HTTP 服务封装（OpenAI 兼容接口�
 server.py 语法检查通过 ✅
 FastAPI x.x.x / uvicorn 依赖可用 ✅
 
-✅ step19_serve 通过
+✅ step20_serve 通过
 ```
 
 ## 与真实 vLLM 的差距
