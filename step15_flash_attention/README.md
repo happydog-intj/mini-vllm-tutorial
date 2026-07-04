@@ -202,6 +202,156 @@ Decode（生成阶段，每次只有 1 个新 token）：
         同时支持直接传入 page table（block_table）读取分页 KV Cache
 ```
 
+## flash_attn_varlen_func 实现原理
+
+### 接口签名
+
+```python
+from flash_attn import flash_attn_varlen_func
+
+output = flash_attn_varlen_func(
+    q,              # [total_tokens, num_heads, head_dim]
+    k,              # [total_tokens, num_kv_heads, head_dim]
+    v,              # [total_tokens, num_kv_heads, head_dim]
+    cu_seqlens_q,   # [batch_size + 1]，int32
+    cu_seqlens_k,   # [batch_size + 1]，int32
+    max_seqlen_q,   # int，最长 q 序列长度
+    max_seqlen_k,   # int，最长 k/v 序列长度
+    causal=True,    # 是否使用因果掩码
+)
+# output: [total_tokens, num_heads, head_dim]
+```
+
+### 为什么比 padded 版本快
+
+**padded 版本的浪费**：
+
+```
+batch 里 3 个序列，长度 [8, 256, 32]
+padding 后全部补到 256：
+  实际 token 数：8 + 256 + 32 = 296
+  padding 后：256 × 3 = 768
+  浪费：(768 - 296) / 768 = 61% 的计算是无效 PAD
+```
+
+**varlen 的做法**：把所有 token 直接拼成 `[296, num_heads, d_head]`，kernel 内部用 `cu_seqlens` 定位每条序列的边界。
+
+### kernel 内部执行流程
+
+```
+输入：q/k/v [total_tokens, H, d]，cu_seqlens [0, 8, 264, 296]
+
+for i in range(batch_size):          ← 每个序列独立处理
+    q_i = q[cu_seqlens[i]:cu_seqlens[i+1]]   # 切片，无拷贝
+    k_i = k[cu_seqlens[i]:cu_seqlens[i+1]]
+    v_i = v[cu_seqlens[i]:cu_seqlens[i+1]]
+
+    # 对 q_i, k_i, v_i 执行标准 FlashAttention 分块算法：
+    # 把 q_i 切成 Br 行的块，k_i/v_i 切成 Bc 列的块
+    # 全部在 SRAM 内完成，不写回 HBM
+    output[cu_seqlens[i]:cu_seqlens[i+1]] = flash_attn(q_i, k_i, v_i)
+```
+
+注意：这个循环在 GPU kernel 内部展开，不是 Python 循环——所有序列在 GPU 上并行处理。
+
+### causal mask 在 varlen 中的处理
+
+`causal=True` 时，kernel 只需对每个序列内部施加下三角掩码。由于序列边界由 `cu_seqlens` 明确标记，**跨序列的 token 天然不会互相 attend**，不需要额外的跨序列 mask。
+
+```
+序列A的 token 只能 attend 序列A内的历史 token
+序列B的 token 只能 attend 序列B内的历史 token
+                ↑
+    cu_seqlens 保证了这个隔离，无需显式跨序列 mask
+```
+
+---
+
+## flash_attn_with_kvcache 实现原理
+
+### 接口签名
+
+```python
+from flash_attn import flash_attn_with_kvcache
+
+output = flash_attn_with_kvcache(
+    q,                  # [batch, seqlen_q, num_heads, head_dim]，decode 时 seqlen_q=1
+    k_cache,            # [batch_size, seqlen_k, num_kv_heads, head_dim] 或分页格式
+    v_cache,            # 同上
+    cache_seqlens=None, # [batch_size]，每条序列在 cache 里实际有效的长度
+    block_table=None,   # [batch_size, max_num_blocks]，分页 KV Cache 的 block table
+    causal=True,
+)
+# output: [batch, seqlen_q, num_heads, head_dim]
+```
+
+### decode 阶段为什么不用 varlen？
+
+Decode 时每条序列只有 1 个新 token（Q 的 seq_len=1），但需要 attend 到所有历史 K/V（K/V 的 seq_len 可能是几千）。这是一个典型的**1 对多**（asymmetric attention）场景：
+
+```
+Q:   [batch, 1, num_heads, d_head]    ← 1 个新 token
+K/V: [batch, N, num_heads, d_head]    ← N 个历史 token（来自 KV Cache）
+
+seq_len_q ≠ seq_len_k，varlen 接口设计是 q 和 k 等长的（prefill），
+不适合这个 1 对多的场景。
+```
+
+`flash_attn_with_kvcache` 专门为这种场景设计，内部对 1 对多的访问模式做了优化。
+
+### 分页 KV Cache 的直接支持
+
+最关键的特性是 `block_table` 参数：
+
+```python
+# block_table: [batch_size, max_num_blocks_per_seq]
+# 每行是一条序列的物理 block ID 列表
+block_table = torch.tensor([
+    [3, 7, 12, 0, 0],   # 序列A：物理 block 3, 7, 12（后面是 padding）
+    [1, 5, 0, 0, 0],    # 序列B：物理 block 1, 5
+], dtype=torch.int32)
+
+output = flash_attn_with_kvcache(
+    q,
+    k_cache,      # [total_blocks, block_size, num_kv_heads, d_head]
+    v_cache,      # 全局物理 KV pool
+    block_table=block_table,
+    cache_seqlens=torch.tensor([48, 32]),  # 序列A有48个有效token，序列B有32个
+)
+```
+
+**kernel 内部执行流程**：
+
+```
+for 序列 i:
+    q_i = q[i, 0]    # 当前新 token 的 Q，[num_heads, d_head]
+
+    # 按 block_table[i] 遍历所有物理 block
+    for block_idx in range(num_blocks_i):
+        physical_block = block_table[i, block_idx]
+        k_block = k_cache[physical_block]  # [block_size, num_kv_heads, d_head]
+        v_block = v_cache[physical_block]
+
+        # 在 SRAM 内完成这个 block 的 attention score 累积
+        # 使用 online softmax 跨 block 维护归一化状态
+        accumulate_attention(q_i, k_block, v_block)
+
+    output[i] = finalize()
+```
+
+**不需要先把 KV 从 paged memory gather 到连续内存**——kernel 直接按 block_table 访问物理 block，消除了之前的 gather 步骤。这就是 step14_2 中 `gather_kv_from_blocks` 在真实 vLLM 里被完全消除的原因。
+
+### 与 step14 系列的对比
+
+| 步骤 | 我们的实现 | flash_attn_with_kvcache |
+|------|-----------|------------------------|
+| KV 写入 | step14_1 的 advanced indexing scatter | kernel 内部直接写入 |
+| KV gather | step14_2 的 advanced indexing gather | **消除**，kernel 直接按 block_table 访问 |
+| Attention 计算 | step14_3 的 bmm / 本章的 SDPA | kernel 内部 FlashAttention 分块 |
+| Causal mask | step14_4 的 broadcast 构造 | **消除**，kernel 内部隐式处理 |
+
+`flash_attn_with_kvcache` 把这四步全部融合进一个 kernel，这是 nano-vllm 相比本教程快 28× 的核心来源之一。
+
 **本教程 FlashAttention：SRAM-aware 注意力计算 的实现是教学简化版**，使用 `flash_attn_func`（非 varlen，非 kvcache），
 演示 FlashAttention 的基本封装和正确性验证。
 完整的 varlen + kvcache 分发逻辑在 nano-vllm 等完整推理引擎中实现。
