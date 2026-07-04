@@ -1,4 +1,4 @@
-# Step 12: Tensor Parallelism — 列并行与行并行
+# Step 17: Tensor Parallelism — 列并行与行并行
 
 ## 为什么需要 Tensor Parallelism
 
