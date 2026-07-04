@@ -278,7 +278,7 @@ FlashAttention 可用: True
 正确性验证: max_diff = 0.001234  （< 0.02 即通过）
 两者输出一致 ✅
 
-✅ step16_flash_attention 通过
+✅ step15_flash_attention 通过
 ```
 
 非 CUDA 环境（CPU/MPS）时，`flash_attention()` 自动回退到 SDPA，

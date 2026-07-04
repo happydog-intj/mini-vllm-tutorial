@@ -202,7 +202,7 @@ Preemption 频繁？
 
 ```
 第一步：建立基线
-  python step19_benchmark/run.py
+  python step18_benchmark/run.py
   记录：TTFT P50/P95/P99，TPOT，Throughput，GPU利用率，显存使用
 
 第二步：确定主要瓶颈

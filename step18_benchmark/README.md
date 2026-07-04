@@ -228,7 +228,7 @@ python run.py
 # 无模型时使用模拟数据展示报告格式
 ```
 
-**有模型时**（需要 `step15_real_model` 的 `RealModelEngine`）：
+**有模型时**（需要 `step19_real_model` 的 `RealModelEngine`）：
 
 ```bash
 QWEN3_MODEL_PATH=~/huggingface/Qwen3-0.6B python run.py
@@ -252,7 +252,7 @@ mini-vllm-tutorial Benchmark 工具
 
 总吞吐量: 412 tok/s
 
-✅ step19_benchmark 通过
+✅ step18_benchmark 通过
 ```
 
 ---

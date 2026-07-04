@@ -293,14 +293,14 @@ Output: '我是Qwen，由阿里云开发的AI助手...'
 
   速度: xxx tok/s
 
-✅ step15_real_model 通过
+✅ step19_real_model 通过
 ```
 
 没有模型时：
 
 ```
 ⚠️  未找到模型：/path/to/Qwen3-0.6B
-✅ step15_real_model 通过（跳过推理测试，未找到模型）
+✅ step19_real_model 通过（跳过推理测试，未找到模型）
 ```
 
 ---

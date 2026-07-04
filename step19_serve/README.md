@@ -160,7 +160,7 @@ server.py
 # 安装依赖
 pip install fastapi uvicorn
 
-# 启动（需要先确保 step15_real_model 的模型路径可用）
+# 启动（需要先确保 step19_real_model 的模型路径可用）
 python server.py --model ~/huggingface/Qwen3-0.6B --port 8000
 ```
 
@@ -220,7 +220,7 @@ HTTP Serve：OpenAI 兼容推理服务: HTTP 服务封装（OpenAI 兼容接口�
 server.py 语法检查通过 ✅
 FastAPI x.x.x / uvicorn 依赖可用 ✅
 
-✅ step20_serve 通过
+✅ step19_serve 通过
 ```
 
 ## 与真实 vLLM 的差距
