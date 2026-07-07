@@ -65,9 +65,12 @@ class PagedScheduler:
     支持 block_table + prefix cache 的 Continuous Batching 调度器。
 
     每轮 schedule()：
-      1. 移除已完成的请求，free 其 block_table
+      1. 移除已完成的请求（标记 FINISHED，从 running 移出）
       2. 从 waiting 补充新请求到 running（直到满 max_running）
       3. 新进来的需要 prefill，已有的需要 decode
+
+    注意：block 的释放（free / release）由 engine 统一管理，
+    scheduler 只负责调度，不直接操作 BlockManager。
     """
 
     def __init__(self, block_manager: BlockManager, max_running: int = 4, block_size: int = 16):
