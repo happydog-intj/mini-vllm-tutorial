@@ -9,7 +9,7 @@ step14_7: Paged Prefix Cache + Batched Forward
 import torch
 import xxhash
 from torch import Tensor
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 from model import TinyTransformerPaged
 from block_manager import BlockManager
 from scheduler import Sequence, PagedScheduler, SequenceStatus
@@ -111,7 +111,7 @@ class PagedPrefixCacheEngine:
         把所有 prefill chunk 和 decode token 拼成一个 flat batch，
         一次 forward_batched 完成所有 Linear 层计算。
         """
-        all_seqs: List[Sequence] = []
+        all_seqs: List[Tuple[str, Sequence, int, Optional[int]]] = []
         tokens_list: List[Tensor] = []
         block_tables: List[List[int]] = []
         start_positions: List[int] = []
@@ -148,25 +148,26 @@ class PagedPrefixCacheEngine:
 
         # 按序列取结果
         for idx, entry in enumerate(all_seqs):
-            kind, seq, pos, end = entry
+            kind, seq, _, cur_end = entry
             s, e = cu_seqlens[idx], cu_seqlens[idx + 1]
             logits = all_logits[s:e]
 
             if kind == 'prefill':
-                seq.prefill_offset = end
-                if end % self.block_size == 0 and end <= len(seq.prompt_ids):
-                    self._save_prefix_cache(seq, end)
+                assert cur_end is not None  # 仅 decode 分支第 4 项为 None
+                seq.prefill_offset = cur_end
+                if cur_end % self.block_size == 0 and cur_end <= len(seq.prompt_ids):
+                    self._save_prefix_cache(seq, cur_end)
                 if seq.prefill_done:
-                    seq.append_token(torch.argmax(logits[-1]).item())
+                    seq.append_token(int(torch.argmax(logits[-1]).item()))
                     seq.status = SequenceStatus.RUNNING
             else:
-                seq.append_token(torch.argmax(logits[-1]).item())
+                seq.append_token(int(torch.argmax(logits[-1]).item()))
 
     def _free_seq(self, seq: Sequence):
         """释放 seq 占用的资源（prefix cache 引用 + 新分配的 block）。"""
-        cached_count = len(seq.block_table) - len(getattr(seq, '_new_blocks', []))
+        cached_count = len(seq.block_table) - len(seq._new_blocks or [])
         self.block_manager.release(seq.block_table[:cached_count])
-        self.block_manager.free(getattr(seq, '_new_blocks', []))
+        self.block_manager.free(seq._new_blocks or [])
 
     @torch.no_grad()
     def generate_batch(self, requests: List[Tuple[Tensor, int]]) -> List[Tensor]:
@@ -181,8 +182,8 @@ class PagedPrefixCacheEngine:
             self._run_batched_step(prefill_seqs, decode_seqs)
 
             for seq in seqs:
-                if seq.status == SequenceStatus.FINISHED and hasattr(seq, '_new_blocks'):
+                if seq.status == SequenceStatus.FINISHED and seq._new_blocks is not None:
                     self._free_seq(seq)
-                    del seq._new_blocks
+                    seq._new_blocks = None
 
         return [torch.tensor(s.token_ids) for s in seqs]

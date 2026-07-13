@@ -36,6 +36,7 @@ class Sequence:
         self.block_table: List[int] = []   # 物理 Block ID 列表（替代 past_key_values）
         self._block_hashes: List[int] = [] # 每个完整 block 的链式 hash（增量积累）
         self._prev_hash: int = 0           # 最新的链式 hash 状态
+        self._new_blocks: Optional[List[int]] = None  # prefill 时新分配的 block（_prepare_prefill 设置）
 
     @property
     def prefill_done(self) -> bool:
@@ -45,7 +46,7 @@ class Sequence:
     def is_done(self) -> bool:
         return (
             self._generated_count >= self.max_new_tokens
-            or (self.token_ids and self.token_ids[-1] == self.EOS_TOKEN_ID)
+            or (len(self.token_ids) > 0 and self.token_ids[-1] == self.EOS_TOKEN_ID)
         )
 
     def append_token(self, token_id: int):

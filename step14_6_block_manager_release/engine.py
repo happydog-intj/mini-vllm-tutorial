@@ -134,11 +134,11 @@ class PagedPrefixCacheEngine:
 
     def _free_seq(self, seq: Sequence):
         """释放 seq 占用的资源（prefix cache 引用 + 新分配的 block）。"""
-        cached_count = len(seq.block_table) - len(getattr(seq, '_new_blocks', []))
+        cached_count = len(seq.block_table) - len(seq._new_blocks or [])
         # prefix cache 引用的 block：ref_count -= 1，归零才回收
         self.block_manager.release(seq.block_table[:cached_count])
         # 本次新分配的 block：直接回收
-        self.block_manager.free(getattr(seq, '_new_blocks', []))
+        self.block_manager.free(seq._new_blocks or [])
 
     @torch.no_grad()
     def generate_batch(self, requests: List[Tuple[Tensor, int]]) -> List[Tensor]:
@@ -159,8 +159,8 @@ class PagedPrefixCacheEngine:
 
             # 释放本轮刚完成的请求的资源
             for seq in seqs:
-                if seq.status == SequenceStatus.FINISHED and hasattr(seq, '_new_blocks'):
+                if seq.status == SequenceStatus.FINISHED and seq._new_blocks is not None:
                     self._free_seq(seq)
-                    del seq._new_blocks  # 防止重复释放
+                    seq._new_blocks = None  # 防止重复释放
 
         return [torch.tensor(s.token_ids) for s in seqs]
