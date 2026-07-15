@@ -18,11 +18,11 @@ Phase 2 — 采样算法
   step06_sampler       ← Greedy / Temperature / Top-k / Top-p / Gumbel-Max
 
 Phase 3 — KV Cache
-  step07_kvcache_single ← 单请求 KV Cache，O(n²) → O(n)
-  step08_kvcache_batch  ← 多请求 Batch + Padding 问题
+  step07_kvcache_for_single_request ← 单请求 KV Cache，O(n²) → O(n)
+  step08_kvcache_static_batching_for_multi_requests ← 多请求 Batch + Padding 问题
 
 Phase 4 — 调度器
-  step09_scheduler       ← Continuous Batching
+  step09_kvcache_continuous_batching_for_multi_requests ← Continuous Batching
   step10_chunked_prefill ← 长 Prompt 分块
   step11_preemption     ← 抢占避免 OOM
 
@@ -73,3 +73,8 @@ python run.py
 ## 总结
 
 学完所有步骤后，可以查看 [SUMMARY.md](SUMMARY.md)——汇总了推理服务的关键配置、监控指标和优化方法。
+
+## 进阶系列
+
+学完主系列 15 步后，继续 16 步进阶优化（量化/投机解码/PD 分离/MoE/结构化输出…）：
+→ 见 [advanced/README.md](advanced/README.md)
