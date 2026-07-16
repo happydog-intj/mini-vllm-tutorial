@@ -272,4 +272,31 @@ TTFT / TPOT / Throughput / GPU 利用率 / KV 命中率
 
 ---
 
-*mini-vllm-tutorial 完结。从零到完整推理引擎，15 步，8 个阶段。*
+## 进阶系列索引（adv01–adv16）
+
+主系列 15 步之外，[`advanced/`](advanced/README.md) 另有 16 步进阶优化，覆盖主系列未讲的推理优化手段。每步独立可运行（`python run.py`）。
+
+| 优化手段 | 对应步骤 | 代码深度 | 主要收益 | 代价 |
+|---------|---------|---------|---------|------|
+| 量化 W4A16/W8A16 | adv01 | 🟢 真代码 | 显存↓4–8×，速度↑ | 精度损失 |
+| 采样进阶 MinP/Penalty/Beam | adv02 | 🟢 | 输出可控 | — |
+| 投机解码 Speculative Decoding | adv03 | 🟢 | decode 2–3× | 草稿模型开销 |
+| Flash-Decoding | adv04 | 🟡 模拟 | 长序列 decode↑ | 需分块 |
+| Radix Attention + CoW | adv05 | 🟢 | 前缀复用↑ | 树管理 |
+| Pipeline Parallel (PP) | adv06 | 🟡 模拟 | 支持更大模型 | bubble |
+| Sequence Parallel (SP) | adv07 | 🟡 模拟 | 序列维切分 | 通信 |
+| Data Parallel + DPLB | adv08 | 🟢 | 多副本均衡 | 副本开销 |
+| TBO/DBO 计算通信重叠 | adv09 | 🟡 模拟 | 计算-通信重叠 | 复杂调度 |
+| PD Disaggregation | adv10 | 🟡 模拟 | 吞吐↑ | KV 迁移 |
+| AFD (Attention/FFN 分离) | adv11 | 🟡 模拟 | A/F 配比均衡 | 跨设备通信 |
+| MoE + EPLB | adv12 | 🟢 | 稀疏激活省算力 | 路由+均衡 |
+| Linear Attention / SSM | adv13 | 🟢 | 长序列 O(n) | 精度近似 |
+| Multi-LoRA | adv14 | 🟢 | 多任务共享 base | 适配器管理 |
+| Guided Decoder | adv15 | 🟢 | 结构化输出 | 约束开销 |
+| Function Call / Tool Call | adv16 | 🟢 | 工具调用 | 循环延迟 |
+
+> 🟢 = 真代码可跑；🟡 = 单机 CPU 难以真实实现，用模拟器/图解讲清原理，README 已诚实标注"非真实加速"。
+
+---
+
+*mini-vllm-tutorial 完结。主系列 15 步 + 进阶 16 步，共 31 步，覆盖从零实现到生产级推理优化的完整知识地图。*
