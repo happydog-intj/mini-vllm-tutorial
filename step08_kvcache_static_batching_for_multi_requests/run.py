@@ -73,7 +73,7 @@ def main():
     print("注：GPU 上 batch matmul 有并行加速，但 padding 浪费始终存在。")
     print("    step09 解决问题 2（Continuous Batching），step12 解决问题 2 的内存碎片。")
 
-    print("\n✅ step08_kvcache_batch 通过")
+    print("\n✅ step08_kvcache_static_batching_for_multi_requests 通过")
 
 if __name__ == "__main__":
     main()

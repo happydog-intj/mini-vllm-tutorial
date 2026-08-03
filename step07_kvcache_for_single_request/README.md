@@ -415,7 +415,7 @@ KV Cache 效果 — NaiveEngine vs KVCacheEngine
 → 序列越长，KV Cache 加速越明显 ✅
 两种引擎生成结果完全一致 ✅
 
-✅ step07_kvcache_single 通过
+✅ step07_kvcache_for_single_request 通过
 ```
 
 `run.py` 同时验证两点：

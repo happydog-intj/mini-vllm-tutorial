@@ -12,7 +12,7 @@
 
 前缀缓存的思路：**把已经算好的前缀 K/V 存下来，下一个请求命中时直接复用，跳过对应的 Prefill 计算。**
 
-这个思路和 [单请求 KV Cache 的 KV Cache](../step07_kvcache_single/README.md) 一脉相承：
+这个思路和 [单请求 KV Cache 的 KV Cache](../step07_kvcache_for_single_request/README.md) 一脉相承：
 
 ```
 单请求 KV Cache KV Cache（请求内复用）：

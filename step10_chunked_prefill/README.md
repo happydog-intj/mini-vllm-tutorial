@@ -7,7 +7,7 @@ Chunked Prefill 如何通过分块混合调度解决这个问题。
 
 ## Prefill 和 Decode 的根本差异
 
-先回顾一下 [单请求 KV Cache](../step07_kvcache_single/README.md) 引入的两个阶段：
+先回顾一下 [单请求 KV Cache](../step07_kvcache_for_single_request/README.md) 引入的两个阶段：
 
 ```
 Prefill（处理 prompt）：
@@ -38,7 +38,7 @@ Decode：小矩阵 + 大 KV Cache 读取，GPU 的显存带宽是瓶颈
 
 ## 那么问题来了：长 Prefill任务一定会阻塞Decode任务
 
-[Continuous Batching 调度器 的 Continuous Batching](../step09_scheduler/README.md) 让短请求完成后立刻补充新请求，
+[Continuous Batching 调度器 的 Continuous Batching](../step09_kvcache_continuous_batching_for_multi_requests/README.md) 让短请求完成后立刻补充新请求，
 但有一个新问题：**新请求进来时需要先做 Prefill。**
 
 Prefill 的计算量随 prompt 长度的平方增长：

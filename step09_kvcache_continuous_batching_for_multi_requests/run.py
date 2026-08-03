@@ -36,7 +36,7 @@ def main():
     assert cb_ms < static_ms, (
         f"Continuous Batching 应该更快: {cb_ms:.0f}ms < {static_ms:.0f}ms"
     )
-    print("\n✅ step09_scheduler 通过")
+    print("\n✅ step09_kvcache_continuous_batching_for_multi_requests 通过")
 
 if __name__ == "__main__":
     main()

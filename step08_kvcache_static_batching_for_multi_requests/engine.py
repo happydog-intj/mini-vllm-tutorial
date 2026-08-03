@@ -19,7 +19,7 @@ from typing import List, Tuple, Optional
 import sys, os, importlib
 
 _step03a_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', 'step07_kvcache_single')
+    os.path.join(os.path.dirname(__file__), '..', 'step07_kvcache_for_single_request')
 )
 if _step03a_path not in sys.path:
     sys.path.insert(0, _step03a_path)

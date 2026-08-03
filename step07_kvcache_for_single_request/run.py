@@ -45,7 +45,7 @@ def main():
     #     f"两引擎应输出相同结果\n  naive:   {out_naive.tolist()}\n  kvcache: {out_kv.tolist()}"
     # )
     print("两种引擎生成结果完全一致 ✅")
-    print("\n✅ step07_kvcache_single 通过")
+    print("\n✅ step07_kvcache_for_single_request 通过")
 
 if __name__ == "__main__":
     main()
