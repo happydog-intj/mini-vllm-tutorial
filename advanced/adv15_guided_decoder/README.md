@@ -106,6 +106,34 @@ return bool(re.fullmatch(self.pattern, self.generated))
 > 仍未合并。本模块在运行时自动检测并选择最优策略，通过 `PARTIAL_MATCH_STRATEGY`
 > 变量暴露当前使用的实现名称（便于调试）。
 
+### ❓ Q1：partial match 为什么要"试探拼接后 fullmatch"？
+
+**问题**：为什么不直接检查当前生成的串是否部分匹配，而要拼接每个候选 token 再 fullmatch？
+
+**答案**：因为 `re` 标准库没有原生的 partial match API。教学版用暴力试探法：对每个候选 token，拼接后检查是否"仍有可能"扩展为合法串。三级回退策略就是因为 Python 标准库支持不够好。
+
+### ❓ Q2：O(vocab) 的逐 token 检查在真实词表（10万+）下会不会很慢？
+
+**答案**：**会非常慢！** 生产版用 **FSM（有限状态机）**：
+
+```
+教学版: 每步 50000 次正则匹配 → 很慢
+生产版: 编译 regex → DFA → 每步 O(1) 查表
+```
+
+Outlines 库就是这样做的——把 regex/JSON Schema/CFG 都编译成 FSM。
+
+### ❓ Q3：mask_logits 用 -inf，和直接删掉候选 token 有什么区别？
+
+**答案**：**-inf mask 保持词表形状和对齐**：
+
+```python
+# -inf mask: logits = [2.0, -inf, 1.0] → softmax → [0.73, 0.0, 0.27] ✓
+# 直接删除: logits = [2.0, 1.0] → 但 token id 映射断了！
+```
+
+此外，-inf mask 对 GPU 友好——可在 CUDA kernel 里并行做。
+
 ---
 
 ## 5. 教学版 vs 真实框架

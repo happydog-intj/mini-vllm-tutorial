@@ -91,6 +91,61 @@ prefix_cache[h2] = past_kv
 
 `ref=2` 表示两个请求共享该前缀节点 —— 物理 KV 只存一份，零拷贝。
 
+### ❓ Q1：Radix Tree 的"压缩"到底压缩了什么？
+
+**问题**：普通 Trie 每个边对应一个 token，Radix Tree 说"压缩"，压缩了什么？
+
+**答案**：压缩的是**只有单个子节点的链状路径**：
+
+```
+普通 Trie（未压缩）:
+  root → "s" → "sy" → "sys" → "sys,p" → "sys,pr" → "sys,pro" → "sys,prompt"
+  7 个节点，但路径上没有分叉 —— 纯粹浪费
+
+Radix Tree（压缩后）:
+  root → ["sys","prompt"]
+  只有 1 个节点，把整条链合并成一条边
+
+**只有出现分叉时才创建新节点**。这就是"基数树"（Radix/Compressed Trie）的核心优化：
+节点数 = 分叉点数，而不是 token 数。当共享前缀很长时，节点数大幅减少。
+```
+
+### ❓ Q2：ref 计数什么时候减少？教学版说"未实现"，那会内存泄漏吗？
+
+**问题**：insert 时 `ref += 1`，但请求结束时没做 `ref -= 1`。教学版会泄漏吗？
+
+**答案**：是的，教学版**没有实现引用递减和节点驱逐**，树会无限增长。真实框架的做法：
+
+```python
+# 请求结束时:
+def release_request(node_path):
+    for node in node_path:
+        node.ref -= 1
+        if node.ref == 0 and all(child.ref == 0 for child in node.children):
+            evict(node)  # LRU 驱逐：从 GPU/CPU 显存中移除 KV
+```
+
+当 `ref == 0` 时，说明没有任何请求经过该节点，可以安全驱逐。SGLang 用 LRU 策略：显存满了就从 `ref == 0` 的节点中选最久未访问的驱逐。
+
+### ❓ Q3：`_split` 为什么必须先保存 `split_tok` 再截断？
+
+**问题**：代码注释说"① 先保存分叉键（必须在截断前）"，不保存会怎样？
+
+**答案**：因为 `node.key[idx]` 依赖于**截断前**的 `node.key`：
+
+```python
+# 正确顺序:
+split_tok = node.key[idx]       # ① 此时 node.key = ["sys","prompt","A"], idx=2 → split_tok = "A"
+node.key = node.key[:idx]       # ② 现在 node.key = ["sys","prompt"]
+node.children = {split_tok: suffix_child}  # ③ {"A": suffix_child} ✓
+
+# 错误顺序（先截断）:
+node.key = node.key[:idx]       # ① node.key 变成 ["sys","prompt"]
+split_tok = node.key[idx]       # ② IndexError! idx=2 超出范围（现在只有 2 个元素）
+```
+
+这是一个经典的**先读后写**顺序依赖 bug。
+
 ---
 
 ## 4. 实现细节

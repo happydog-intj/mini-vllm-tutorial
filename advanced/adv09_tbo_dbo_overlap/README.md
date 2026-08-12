@@ -64,6 +64,65 @@ GPU 0  [COMPUTE_0]  [COMM_0]  [COMPUTE_1]  [COMM_1]  ...
 
 **节省量**：每个 microbatch 重叠掉 `min(ct, mt)`，总节省 `(n-1) × min(ct, mt)`。
 
+### ❓ Q1：公式 `n × max(ct, mt) + min(ct, mt)` 怎么来的？
+
+**问题**：为什么不是 `n × (ct + mt) / 2` 之类的？
+
+**答案**：推导来自 TBO 的时间线分析：
+
+```
+每个 microbatch i 的两条执行流：
+  compute_i: 耗时 ct
+  comm_i:    耗时 mt
+
+重叠的关键：comm_i 和 compute_{i+1} 并行。
+
+情况 1: ct >= mt（计算 >= 通信）
+  每轮的有效耗时 = ct（因为 mt 被完全重叠了）
+  最后一轮多一个 mt（没有下一轮的计算来重叠它）
+  总耗时 = n × ct + mt = n × max(ct,mt) + min(ct,mt)  ✓
+
+情况 2: mt > ct（通信 > 计算）
+  每轮的有效耗时 = mt（因为 ct 被完全重叠了）
+  最后一轮多一个 ct
+  总耗时 = n × mt + ct = n × max(ct,mt) + min(ct,mt)  ✓
+```
+
+所以公式统一为 `n × max(ct, mt) + min(ct, mt)`。
+
+### ❓ Q2：当 ct < mt（通信大于计算）时，TBO 还有收益吗？
+
+**问题**：如果通信比计算慢，那 bottleneck 是通信，重叠有意义吗？
+
+**答案**：**有意义，但收益方向反了**：
+
+```
+n=8, ct=30ms, mt=50ms:
+  朴素：8 × (30+50) = 640ms
+  TBO ：8 × 50 + 30 = 430ms
+  加速：1.49×
+
+和 ct=50, mt=30 的加速比一模一样！
+因为公式只取决于 max 和 min，与谁大谁小无关。
+```
+
+但现实中通信 > 计算很少见（除非网络很差）。通常 ct > mt，TBO 省的是通信时间。
+
+### ❓ Q3：TBO 和 CUDA Graph 能同时用吗？
+
+**问题**：step16 的 CUDA Graph 也优化了 launch overhead，和 TBO 冲突吗？
+
+**答案**：**不冲突，两者解决不同问题，可以叠加**：
+
+| | CUDA Graph | TBO/DBO |
+|---|---|---|
+| 优化目标 | CPU 调度开销（kernel launch） | GPU 计算与通信串行 |
+| 节省量 | 每步 ~10-50μs（decode 阶段占比高） | 每层 ~min(ct, mt) |
+| 作用机制 | 预录制 kernel 序列，一次提交 | 双 CUDA Stream 流水线并发 |
+| 可叠加 | ✅ | ✅ |
+
+真实系统中两者常同时启用：CUDA Graph 减少 launch 开销，TBO 重叠计算和通信。
+
 示例（n=8, ct=50ms, mt=30ms）：
 - 朴素：8 × (50+30) = **640 ms**
 - TBO ：8 × 50 + 30 ≈ **430 ms**（加速 ~1.49×，实测约 1.6×）

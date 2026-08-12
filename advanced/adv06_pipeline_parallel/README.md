@@ -15,6 +15,23 @@
 
 ## 2. 问题
 
+> **⚠️ 训练 vs 推理的适用性说明**
+>
+> 本章讨论的 GPipe / 1F1B 调度策略是**训练场景**的优化——它们的核心区别在于"中间激活要保留到 backward 才能释放"，而推理阶段没有 backward，不存在这个问题。
+>
+> 但流水线并行在**推理中仍然有用**，只是解决的问题不同：
+>
+> | | 训练 | 推理 |
+> |---|---|---|
+> | PP 解决的问题 | 权重 + 激活显存超过单卡容量 | 权重显存超过单卡容量 |
+> | 有无 backward | 有，激活必须保留 | 无，前向完即释放 |
+> | 调度复杂度 | GPipe / 1F1B / Interleaved | 纯前向流水线（简单得多） |
+> | 气泡来源 | stage 间等待 + 激活驻留 | 仅 stage 间等待（用 microbatch 填充） |
+>
+> 推理中的 PP 调度非常简单：多个请求（或一个请求的多个 microbatch）像流水线一样依次经过各 stage，当 request A 在 GPU1 时 GPU0 可以处理 request B，用请求级别的流水来填充气泡。vLLM 的 PP 实现就是这种纯前向流水线。
+>
+> 本章选择讲训练场景的 GPipe vs 1F1B，是因为它能更深刻地展示流水线并行的**调度设计空间**——理解了"激活驻留"这个约束，才能理解为什么调度策略如此重要。
+
 **单卡装不下大模型。**
 
 以 LLaMA-70B（fp16）为例，仅权重就需要 ~140 GB。一张 A100（80 GB）远远不够。
@@ -49,7 +66,44 @@ GPU3:             [F][B]
 
 **另一个问题：GPipe 的显存气泡。**
 
+> **GPipe** 是 Google 在 2019 年提出的流水线并行方案（[Huang et al., GPipe: Efficient Training of Giant Neural Networks using Pipeline Parallelism](https://arxiv.org/abs/1811.06965)）。它是最早将"把 batch 切成多个 microbatch + 流水线调度"系统化的工作，核心思路很简单：先让所有 microbatch **全部完成前向**，再统一做反向。这个"全 F 后统一 B"的调度方式后来就被称为 **GPipe 调度**，成为流水线并行领域的 baseline。后续的 1F1B（PipeDream）、Interleaved 1F1B（Megatron-LM）等方案都是针对 GPipe 的缺陷改进而来。
+
 GPipe 要求所有 microbatch 全部完成前向后才开始反向——这意味着所有 microbatch 的中间激活必须**同时驻留**在显存中。当 n 很大时，激活显存成为瓶颈。
+
+为什么中间激活不能释放？因为**反向传播需要前向的中间结果**：
+
+```
+前向：  input → [Layer] → activation → [Layer] → output
+                              ↑
+反向：  grad  ← [Layer] ← 需要 activation 来计算梯度
+                              ↑
+                    如果释放了，反向就算不了
+```
+
+具体来说，每个 microbatch 经过某个 stage 的前向后，会产生一组中间激活（hidden states、attention scores 等）。这些激活必须保留到**该 microbatch 的反向传播经过同一个 stage** 时才能释放。
+
+GPipe 的问题在于，它的调度策略是"全部前向完成 → 全部反向开始"：
+
+```
+GPipe 调度（n=4 microbatch，GPU0 视角）：
+
+  时间轴 →
+  F(mb0) → F(mb1) → F(mb2) → F(mb3) → [等待] → B(mb3) → B(mb2) → B(mb1) → B(mb0)
+
+  显存中驻留的激活：
+  t1: act(mb0)                              ← 1 份
+  t2: act(mb0), act(mb1)                    ← 2 份
+  t3: act(mb0), act(mb1), act(mb2)          ← 3 份
+  t4: act(mb0), act(mb1), act(mb2), act(mb3)← 4 份 ← 峰值！
+  t5: 等待中...4 份全部驻留，无法释放
+  t6: B(mb3) 完成后释放 act(mb3)             ← 3 份
+  t7: B(mb2) 完成后释放 act(mb2)             ← 2 份
+  ...
+
+  峰值 = n = 4 份激活同时驻留
+```
+
+而 1F1B 通过**交替执行前向和反向**，使得每完成一个新 mb 的前向就立刻释放一个旧 mb 的激活（因为旧 mb 的反向已经算完了），从而将峰值驻留数压缩到 `p-1`。
 
 ---
 
@@ -96,6 +150,68 @@ GPU3:             [F0|B0][F1|B1][F2|B2][F3|B3]
 | 节省  | —             | 25%     | 62.5%   | 90.6%    |
 
 1F1B 将激活显存峰值从 `O(n)` 压缩到 `O(p)`，当批量大（n >> p）时效果显著。
+
+### ❓ Q1：1F1B 的"峰值驻留 mb 数 = p-1"怎么算出来的？
+
+**问题**：为什么不是 p、不是 n/2，偏偏是 p-1？
+
+**答案**：看 1F1B 的 **warmup 阶段**：
+
+```
+GPU0 的前向时间线：
+  step 0: F0  ← GPU0 处理 mb0 的前向
+  step 1: F1  ← GPU0 处理 mb1 的前向
+  step 2: F2  ← GPU0 处理 mb2 的前向
+  step 3: F3|B0 ← GPU0 处理 mb3 的前向，同时开始 mb0 的反向
+
+在 step 3 之前，GPU0 已经完成了 F0, F1, F2 但还没开始任何反向——
+这意味着 mb0, mb1, mb2 的中间激活**同时驻留**在显存中。
+
+mb3 刚完成前向就立刻开始反向，所以 mb3 的激活不会积累到下一步。
+因此峰值 = 已完成前向但还未开始反向的 mb 数 = p-1 = 3。
+```
+
+对 GPipe 来说，所有 n 个 mb 都要等全部前向完才反向 → 峰值 = n。
+
+### ❓ Q2：为什么串行模拟的总时间不能比较两种调度的速度？
+
+**问题**：GPipe 串行时间更长/更短，不代表真实情况吗？
+
+**答案**：串行模拟的本质是**把所有 GPU 的操作排成一个时间线**：
+
+```
+真实并行（4 GPU）：
+  GPU0 在 t=0~10 做 F0，同时 GPU1 空闲
+  GPU1 在 t=10~20 做 F0，同时 GPU0 做 F1
+  → 总 wall clock = 最后一个 GPU 完成的时间
+
+串行模拟（1 CPU 模拟）：
+  "时间" = 所有操作的累计耗时
+  → 这不是 wall clock，而是总计算量
+```
+
+GPipe 和 1F1B 的**总计算量相同**（都是 n×p 次前向 + n×p 次反向），所以串行总时间差不多。但**真实 wall clock** 下，1F1B 能更早开始反向、更早释放显存，这才是优势所在。
+
+### ❓ Q3：Interleaved 1F1B 的"虚拟 stage"是什么？
+
+**问题**：bubble ratio 从 `(p-1)/n` 降到 `(p-1)/(mn)`，m 是什么？
+
+**答案**：Interleaved 1F1B 把**每个物理 stage 切成 m 个虚拟子 stage**：
+
+```
+标准 1F1B（p=4 stage）：
+  GPU0 持有 layer 0-7  →  1 个虚拟 stage
+  GPU1 持有 layer 8-15 →  1 个虚拟 stage
+
+Interleaved（p=4, m=2）：
+  GPU0 持有 layer 0-3, 8-11  →  2 个虚拟 stage（交替执行）
+  GPU1 持有 layer 4-7, 12-15 →  2 个虚拟 stage
+
+效果：bubble 从 (4-1)/n = 3/n 降到 (8-1)/(2n) = 7/(2n) → 更小的空闲窗口
+代价：每个虚拟 stage 需要额外的 pipeline 通信
+```
+
+Megatron-LM 默认用 m=2，bubble 约减半，通信量加倍。
 
 ---
 

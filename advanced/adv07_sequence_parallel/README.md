@@ -103,6 +103,118 @@ SP 切分后每卡激活：
 
 与 TP（每层 2 次 AllReduce）总量相当，但**激活显存**从 `[seq, hidden]` 降至 `[seq/sp, hidden]`。
 
+### ❓ Q1：Q 切分后 K/V 保持完整就等价了，那 SP 的意义在哪？
+
+**问题**：如果 K/V 每卡都要完整的一份，那不是每卡都存了 `[seq, hidden]` 的激活？SP 省显存的效果哪来的？
+
+**答案**：好问题！这里需要区分**计算时**和**存储时**：
+
+```
+计算时（LayerNorm 后）：
+  每卡通过 AllGather 拿到完整 [seq, hidden] → 做 LayerNorm → 做 QKV 投影
+
+存储时（进入下一层前）：
+  ReduceScatter 后，每卡只持有 [seq/sp, hidden] → 激活显存确实缩减了！
+
+关键点：K/V 的"完整"是指**注意力计算需要看到全部序列**，
+但 K/V 本身在各卡上也是分片的——计算某卡的 Q 分片时，
+只需要通过 AllGather 临时凑齐 K/V（计算完就释放）。
+所以**峰值激活存储**仍然是 [seq/sp, hidden]。
+```
+
+### ❓ Q2：`all_gather` 用 `[shard] * N` 模拟合理吗？
+
+**问题**：真实 AllGather 是 N 张卡各贡献不同的 shard，教学版用同一个 shard 复制 N 次，语义对吗？
+
+**答案**：形状上对，内容上不对。但这不影响**演示目的**：
+
+```python
+# 教学版：all_gather([A,B]) → [A,B,A,B]  （复制同一份）
+# 真实版：all_gather(rank0 的 [A,B]) → [A,B,C,D]  （各卡贡献不同部分）
+
+# 但对于验证形状和通信量来说：
+#  - 输出形状 = local_size × N ✓
+#  - 通信量 = (N-1)/N × total_size ✓（每卡发送自己的部分）
+
+教学版省略了跨进程通信，只演示"形状变换"和"为什么需要 AllGather"。
+```
+
+### ❓ Q3：SP 和 TP 能同时用吗？
+
+**问题**：SP 切序列维，TP 切隐藏维，会不会冲突？
+
+**答案**：**可以且经常组合使用**（Megatron-LM 的 3D 并行 = DP + TP + SP）：
+
+```
+SP=4, TP=2 时：
+  激活被切成 [seq/4, hidden/2] 每卡
+  Attention 计算：SP 负责序列通信，TP 负责 hidden 维通信
+  通信复用：Megatron 把 TP 的 AllReduce 拆成 AllGather+ReduceScatter，
+           与 SP 的通信完全复用，不增加额外通信量
+```
+
+关键是 SP 和 TP 使用**同一进程组**——SP 的通信就嵌入在 TP 的通信原语中，不额外增加带宽消耗。
+
+### ❓ Q4：为什么每个卡的 Q 分片仍需看到全部 K/V 才能正确计算？
+
+**问题**：SP 把 Q 切到各卡了，为什么 K/V 不能也只看本段的，非要 AllGather 拿全部 K/V？
+
+**答案**：因为 attention 的计算公式决定了这一点：
+
+```
+out[i] = softmax(q[i] @ K.T / sqrt(d)) @ V
+```
+
+每一行 Q 的输出，需要和**所有位置的 K** 做点积算 score，再对**所有位置的 V** 做加权求和。因果 mask 只挡住"未来位置"（j > i），但 j ≤ i 的所有位置都必须参与计算：
+
+```
+Sequence Parallel（多卡并行处理同一个 prompt，seq=1024, sp=2）：
+
+  卡 0 持有: Q[0:512]
+  卡 1 持有: Q[512:1024]
+
+  卡 0 算 out[256] 时：
+    scores = q[256] @ K[0:256].T   ← 必须看到位置 0~256 的所有 K
+    out[256] = softmax(scores) @ V[0:256]
+
+  卡 1 算 out[768] 时：
+    scores = q[768] @ K[0:768].T   ← 必须看到位置 0~768 的所有 K！
+                          ↑
+              这些 K 有一半在卡 0 上，必须通信拿过来
+```
+
+如果只看本段 KV（Q[512:1024] 只看 K[512:1024]），那 out[768] 就丢失了对位置 0~511 的注意力，结果是**数学错误**的。
+
+### ❓ Q5：SP 和 Chunked Prefill 是什么关系？看起来都是"把序列切块"
+
+**问题**：Chunked Prefill（基础章节）也是把长 prompt 切成 chunk 分别处理，SP 是不是它的分布式版本？
+
+**答案**：不是。虽然都涉及"把序列切块"，但解决的问题和切分维度不同：
+
+| | Chunked Prefill | Sequence Parallel |
+|---|---|---|
+| **目的** | 控制单次 prefill 计算量，避免长 prompt 阻塞 decode 请求 | 把激活显存分摊到多张卡，突破单卡显存瓶颈 |
+| **切分位置** | 时间维度 — 同一张卡，把长 prompt 分多次处理 | 空间维度 — 同一时刻，把序列分到多张卡并行处理 |
+| **是否分布式** | 单卡，不需要通信 | 多卡，需要 AllGather/ReduceScatter 通信 |
+| **K/V 依赖** | 每个 chunk 只需前缀 KV（因果 mask 天然截断 + KV Cache 累积） | 每个卡的 Q 分片需看到**全部 K/V**（必须通信） |
+
+核心区别在于 attention 计算时 KV 的来源：
+
+```
+Chunked Prefill（单卡，时间切分）：
+  chunk 0 先算 Q[0:512]，产生 KV Cache[0:512]
+  chunk 1 再算 Q[512:1024]，此时 KV Cache[0:512] 已经在本卡显存里
+  → 不需要跨卡通信，KV 是在同一张卡上逐步积累的
+
+Sequence Parallel（多卡，空间切分）：
+  卡 0 和卡 1 **同时**算，卡 1 的 Q[512:1024] 需要卡 0 持有的 K[0:512]
+  → 这些 K 物理上在另一张卡的显存里，必须 AllGather 通信拿过来
+```
+
+本质区别：Chunked Prefill 是**串行**处理各 chunk，前一个 chunk 的 KV 自然在本卡积累；SP 是**并行**处理各分片，但 attention 的全局依赖关系不会因为并行就消失，所以必须通信。
+
+如果硬要类比，**Ring Attention** 更像是 Chunked Prefill 的分布式版本——它把 KV 也分块了，通过卡间环形传递 KV 分片，每次只处理一块 KV，累积出完整的 attention 结果。而 Megatron 的 SP 思路不同：它是把 TP 的 AllReduce 拆成 AllGather + ReduceScatter，顺便完成序列维的切分/拼接，本质是 TP 的延伸。
+
 ---
 
 ## 4. 实现细节

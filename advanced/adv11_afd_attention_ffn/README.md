@@ -163,6 +163,54 @@ def balanced_config(attn_time, ffn_time):
 - 数学保证: `(a_int // g) / (f_int // g) = attn_time / ffn_time`，
   故 `attn_time / a_units = ffn_time / f_units`，两端实际耗时完全相等。
 
+### ❓ Q1：均衡条件 `attn_time / a_units ≈ ffn_time / f_units` 是充分条件吗？
+
+**问题**：两端耗时相等就一定最优吗？如果 Attention 和 FFN 之间有数据传输开销呢？
+
+**答案**：教学版忽略了**数据传输开销**。真实 AFD 中，Attention 的输出要传给 FFN 集群：
+
+```
+真实总耗时 = attn_time/a_units + transfer_time + ffn_time/f_units
+
+如果 transfer_time 远小于计算时间，可以忽略，均衡条件成立。
+但如果传输很慢（跨机部署），那 AFD 可能不如合并部署——
+因为传输开销吃掉了均衡收益。
+
+这就是为什么真实 AFD 要求高速互连（NVLink/InfiniBand），不能用以太网。
+```
+
+### ❓ Q2：实际中怎么测量 attn_time 和 ffn_time？
+
+**问题**：教学版用固定常数（20ms, 50ms），真实系统怎么获得这些值？
+
+**答案**：通过 **profiling**（性能分析）：
+
+```python
+start = time.perf_counter()
+attention_forward(x)
+attn_time = time.perf_counter() - start
+
+start = time.perf_counter()
+ffn_forward(x)
+ffn_time = time.perf_counter() - start
+```
+
+Profiling 需要在目标硬件上做——不同 GPU、batch size、seq len 下比例会变化。
+
+### ❓ Q3：最小整数比 2:5，实际有 10 台设备怎么办？
+
+**问题**：GCD 给出最小比例，实际设备数不匹配时怎么处理？
+
+**答案**：最小比是**比例基准**，实际设备数必须是比例的整数倍：
+
+```
+最小比 2:5，总需 7 台。有 14 台 → 4:10（各翻倍，均衡不变）
+有 10 台（不是 7 的倍数）→ 向上取整用 14 台（闲置 4 台）
+  或用近似比（如 1:3），但均衡度下降
+
+生产系统会在"完全均衡"和"近似均衡"间做 trade-off。
+```
+
 ---
 
 ## 5. 教学版 vs 真实框架

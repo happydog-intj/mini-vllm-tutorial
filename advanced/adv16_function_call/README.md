@@ -99,6 +99,70 @@ def tool_loop(user_query, max_iters=3):
 
 教学版用 `scripted_model` 按轮次返回不同工具调用（先 calculator 再 get_weather），最后一轮返回非 JSON 给出最终答案，体现"多轮工具 → 收敛"的完整轨迹。真实版由模型自己决定下一步。
 
+### ❓ Q1：模型怎么"知道"有哪些工具可以调？
+
+**问题**：模型不是只会生成文本吗，它怎么知道 `get_weather` 和 `calculator` 的存在？
+
+**答案**：工具描述被**写进 system prompt**：
+
+```
+System: 你有以下工具可用：
+  - get_weather(city): 查询指定城市的天气
+  - calculator(expr): 计算数学表达式
+
+请根据需要调用工具。如果不需要，直接回答用户问题。
+```
+
+模型在训练时见过大量"工具调用"的对话样本，学会了根据上下文选择合适的工具。**它不是真的"调用"函数，而是生成一个看起来像工具调用的 JSON 字符串**。下游解析器拿到这个 JSON 后，才真正执行函数。
+
+### ❓ Q2：`eval()` 在教学版里用，生产环境有什么安全问题？
+
+**问题**：`eval(args.get('expr','0'))` 可以执行任意 Python 代码！
+
+**答案**：**绝对不要在生产环境用 eval 处理用户输入！** 教学版只是为了演示。生产系统的做法：
+
+```python
+# 安全替代方案：
+import ast
+# 方案 1：ast.literal_eval（只允许字面量表达式）
+result = ast.literal_eval(safe_expr)  # 不能调用函数/导入模块
+
+# 方案 2：专用计算器库
+import numexpr
+result = numexpr.evaluate(expr)  # 只支持数学运算
+
+# 方案 3：沙箱执行
+# 在隔离容器（Docker / gVisor）中执行，即使被注入也影响有限
+```
+
+OpenAI 的 calculator tool 内部也是沙箱执行，不是直接 eval。
+
+### ❓ Q3：多工具并行（parallel tool calls）是怎么实现的？
+
+**问题**：OpenAI 支持一次调多个工具（parallel tool calls），教学版是串行的。
+
+**答案**：Parallel tool calls 的核心是**模型一次性输出多个工具调用**：
+
+```json
+{
+  "tool_calls": [
+    {"name": "get_weather", "args": {"city": "北京"}},
+    {"name": "get_weather", "args": {"city": "上海"}}
+  ]
+}
+```
+
+执行时并行调用：
+```python
+results = asyncio.gather(
+    execute_tool(call) for call in tool_calls
+)
+```
+
+把结果一起回填到 prompt。收益：两个独立工具调用可以并发，延迟取 max 而非 sum。教学版是串行的，没有展示这个优化。
+
+---
+
 ## 教学版 vs 真实框架
 
 | 维度 | 教学版 | 真实框架 |

@@ -13,7 +13,44 @@
 
 ## 2. 问题：Decode 时单 Q 对超长 KV，显存带宽吃满
 
-Prefill 阶段 Q/K/V 等长，GPU 的 SM 可以沿 Q 的行方向并行。
+### Prefill 阶段：天然高并行
+
+Prefill 阶段 Q/K/V 等长（都是 prompt 长度），GPU 的 SM 可以沿 Q 的行方向并行：
+
+```
+Prefill（prompt_len = 512）：
+
+  Q: [512, heads, d_head]    ← 512 行，每行可独立计算 attention
+  K: [512, heads, d_head]
+  V: [512, heads, d_head]
+
+  GPU 并行策略：
+    SM 0  → Q 的第 0~63 行    （每行独立算 scores、softmax、加权 V）
+    SM 1  → Q 的第 64~127 行
+    SM 2  → Q 的第 128~191 行
+    ...
+    SM 7  → Q 的第 448~511 行
+
+  每个 SM 处理的工作量：
+    scores[i] = Q[i] · K^T     → [1, seq] 向量
+    attn[i]   = softmax(scores[i])
+    out[i]    = attn[i] · V    → [1, d_head] 向量
+```
+
+关键点：**Q 有多少行，就有多少独立任务可以分配给不同 SM**。这是一种天然的数据并行 —— 每行 Q 的注意力计算彼此无关（因果 mask 只影响每行内部看到的 K 范围，行与行之间互不干扰）。
+
+```
+并行度对比：
+
+  Prefill（seq=512, 8 heads）：可并行任务 = 512 × 8 = 4096
+  → GPU 上百个 SM 全部有活干，计算密集型（compute-bound）
+
+  Decode（1 token, 8 heads）：可并行任务 = 1 × 8 = 8
+  → 绝大多数 SM 空闲，带宽瓶颈（memory-bound）
+```
+
+### Decode 阶段：并行度骤降
+
 但 **decode 阶段每步只有 1 个新 token**，Q 退化为单行：
 
 ```
@@ -99,6 +136,64 @@ ASCII 图解：
 ```
 
 归约的开销与 `num_splits` 成正比，远小于顺序扫描整段 KV 的代价。
+
+### ❓ Q1：online softmax 归约为什么数学上严格等价？
+
+**问题**：各段独立做 softmax，再合并，怎么就和全局一次 softmax 结果一样？
+
+**答案**：关键在 softmax 的**平移不变性**（shift invariance）。让我一步步推：
+
+```
+全局 softmax（以两段 A, B 为例）：
+  softmax(s_i) = exp(s_i) / Σ_j exp(s_j)
+
+设段 A 的局部 softmax：sa_i = exp(s_Ai - m_A) / Σ exp(s_Aj - m_A)
+其中 m_A = max(s_A)，m_B = max(s_B)
+
+归约时，各段的分子和分母都需要对齐到同一个基准 Gm = max(m_A, m_B)：
+  段 A 的真实分子 = Σ exp(s_Ai) = Σ exp(s_Ai - m_A + m_A)
+                   = Σ sa_i × exp(m_A)  × (局部归一化的分母)
+                   = o_A × exp(m_A)
+
+对齐到 Gm：o_A × exp(m_A) = o_A × exp(m_A - Gm) × exp(Gm)
+                                    ↑ w_A
+
+所以 Go = o_A × w_A + o_B × w_B = o_A × exp(m_A - Gm) + o_B × exp(m_B - Gm)
+     Gs = s_A × exp(m_A - Gm) + s_B × exp(m_B - Gm)
+
+最终 = Go / Gs = (Σ 所有 exp(s_i)) / (Σ 所有 exp(s_i)) = 全局 softmax ✓
+```
+
+直觉：各段的 softmax 只是"视角不同"，归约时用 `exp(m_k - Gm)` 把所有视角对齐到同一坐标系。
+
+### ❓ Q2：`num_splits` 选多少最优？
+
+**问题**：split 越多并行度越高，但归约开销也越大。最优值是多少？
+
+**答案**：最优 splits 取决于**序列长度**和**GPU 算力**：
+
+```
+seq=4K  → splits=4~8    （太少了 SM 利用率不够）
+seq=16K → splits=16~32  （最佳 sweet spot）
+seq=64K → splits=32~64  （再多归约开销开始抵消）
+```
+
+经验法则：**splits ≈ seq / 1024**，上限 64。FlashAttention-2 内部会根据 GPU 型号和 seq 长度动态选择 splits，不是固定值。教学版用固定 splits 是因为只在 CPU 上验证数值等价性。
+
+### ❓ Q3：Flash-Decoding 和 FlashAttention 是一回事吗？
+
+**问题**：它们都来自 Tri Dao 的团队，有什么区别？
+
+**答案**：是**同一个库里的不同优化路径**：
+
+| | FlashAttention-1/2 (Prefill) | Flash-Decoding (Decode) |
+|---|---|---|
+| 优化目标 | Q/K/V 都很长时 O(seq²) 的 IO 瓶颈 | 单 Q 对长 KV 时 SM 利用率低 |
+| 核心技术 | Tiling + recomputation（不存 [seq,seq] 矩阵） | split-K + online softmax 归约 |
+| 适用阶段 | Prefill（prompt 处理） | Decode（token 生成） |
+| 并行方向 | 沿 Q 和 K 两个维度 | 只沿 K（KV）维度 |
+
+可以理解为：FlashAttention 解决了 prefill 的**显存瓶颈**，Flash-Decoding 解决了 decode 的**算力利用率瓶颈**。两者合起来覆盖了 LLM 推理的两个阶段。
 
 ---
 
