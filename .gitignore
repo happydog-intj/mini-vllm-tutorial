@@ -54,3 +54,4 @@ benchmark_results/
 
 #claude 相关
 .claude/
+advanced/*/media/

@@ -288,7 +288,20 @@ python run.py
 
 # 批量调度演示(多请求)
 python multi_lora_engine.py
+
+# 数学原理动画（需安装 manim: pip install manim）
+manim -pql lora_math_animation.py LoRAMathScene    # 低质量预览
+manim -pqh lora_math_animation.py LoRAMathScene    # 高质量渲染
 ```
+
+### 动画内容（lora_math_animation.py）
+
+使用 Manim Community Edition 制作的 3Blue1Brown 风格数学动画，包含四幕：
+
+1. **全量微调的代价** — 可视化 d×d 的完整 ΔW 矩阵，展示 16M 参数的规模
+2. **低秩假设** — ΔW 的奇异值条形图，展示前 r 个奇异值占主导（>95% 信息）
+3. **瓶颈几何** — 输入空间 → A 压缩到 r 维瓶颈 → B 展开到输出空间的动画
+4. **Multi-LoRA 切换** — 同一个 base 向量 + 不同 adapter 偏移方向的向量加法可视化
 
 **预期输出(run.py):**
 

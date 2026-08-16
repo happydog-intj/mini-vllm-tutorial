@@ -294,6 +294,7 @@ TTFT / TPOT / Throughput / GPU 利用率 / KV 命中率
 | Multi-LoRA | adv14 | 🟢 | 多任务共享 base | 适配器管理 |
 | Guided Decoder | adv15 | 🟢 | 结构化输出 | 约束开销 |
 | Function Call / Tool Call | adv16 | 🟢 | 工具调用 | 循环延迟 |
+| Logits Tricks 工具箱 | adv17 | 🟢 | 输出控制(分类/禁止/偏置) | — |
 
 > 🟢 = 真代码可跑；🟡 = 单机 CPU 难以真实实现，用模拟器/图解讲清原理，README 已诚实标注"非真实加速"。
 

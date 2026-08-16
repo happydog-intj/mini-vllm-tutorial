@@ -38,6 +38,7 @@ Phase G — 服务与输出控制
   adv14_multi_lora           ← Multi-LoRA 动态切换
   adv15_guided_decoder       ← JSON/regex 结构化输出
   adv16_function_call        ← Function Call / Tool Call
+  adv17_logits_tricks        ← Logits 层输出控制工具箱
 ```
 
 ## 学习方式

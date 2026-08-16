@@ -151,6 +151,111 @@ Outlines 库就是这样做的——把 regex/JSON Schema/CFG 都编译成 FSM�
 
 ---
 
+## 5.5 深入：模型具体怎么输出 JSON？
+
+很多人好奇：模型明明是一个概率分布采样器，它怎么"知道"要输出合法 JSON？
+
+**答案：它不知道。是我们在每一步强制它只能选合法 token。**
+
+### 完整流程：生成 `{"val": 42}`
+
+把 JSON 语法看成一个**有限状态机 (FSM)**，当前状态决定下一步允许什么字符：
+
+```
+┌─────────┐    {     ┌──────────┐    "     ┌──────────┐
+│  START   │────────▶│  OBJ_KEY │────────▶│  IN_STR  │
+└─────────┘         └──────────┘         └──────────┘
+                                               │ "
+                                               ▼
+┌─────────┐    }     ┌──────────┐    :     ┌──────────┐
+│   END   │◀────────│ OBJ_VAL  │◀────────│  COLON   │
+└─────────┘         └──────────┘         └──────────┘
+```
+
+**逐 token 的决策过程：**
+
+| Step | 已生成 | 当前状态 | 允许的 token | 选中 | 原因 |
+|------|--------|----------|-------------|------|------|
+| 1 | `""` | START | `{` | `{` | JSON 对象必须以 `{` 开头 |
+| 2 | `{` | OBJ_KEY | `"` | `"` | key 必须是字符串 |
+| 3 | `{"` | IN_STR | `a-z, A-Z, 0-9, "` | `v` | 字符串内容或结束引号 |
+| 4 | `{"v` | IN_STR | `a-z, A-Z, 0-9, "` | `a` | 继续字符串 |
+| 5 | `{"va` | IN_STR | `a-z, A-Z, 0-9, "` | `l` | 继续字符串 |
+| 6 | `{"val` | IN_STR | `"` | `"` | 结束 key（模型概率最高） |
+| 7 | `{"val"` | COLON | `:` | `:` | key 后**只能**是冒号 |
+| 8 | `{"val":` | OBJ_VAL | `0-9, ", {, [, t, f, n` | `4` | 值开始，数字/字符串/对象/数组/布尔/null |
+| 9 | `{"val":4` | IN_NUM | `0-9, }, ,` | `2` | 继续数字或结束 |
+| 10 | `{"val":42` | IN_NUM | `}, ,` | `}` | 结束对象 |
+
+**关键洞察：** Step 7 只有一个合法选择 `:`，模型别无选择。Step 8 有多个合法选择，这时模型的概率分布在合法候选中自由竞争。
+
+### 数学：mask 如何工作
+
+每一步，词表中所有 token 都有一个 logit 值（模型的原始打分）。Guided decoder 的工作：
+
+```python
+# 假设词表 = ["{", "}", '"', "a", "5", ":", " ", "\n"]
+# 模型输出 logits = [2.1, 0.3, 1.8, -0.5, 0.9, -1.2, 0.4, -0.8]
+
+# 当前状态 START → 只允许 "{"
+allowed = [True, False, False, False, False, False, False, False]
+
+# mask 操作
+masked_logits = [2.1, -inf, -inf, -inf, -inf, -inf, -inf, -inf]
+
+# softmax 后
+probs = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# → 必然选中 "{"
+```
+
+当允许多个 token 时（如 Step 8），mask 保留多个候选，模型在它们之间按原始概率分布选择：
+
+```python
+# 状态 OBJ_VAL → 允许值的起始字符
+# logits = [0.1, -0.5, 2.3, 0.8, 1.9, -1.2, 0.4, -0.8]
+# allowed: '"', 数字(0-9), '{', '[', 't', 'f', 'n'
+
+# 假设简化为: allowed = [False, False, True, False, True, False, False, False]
+masked_logits = [-inf, -inf, 2.3, -inf, 1.9, -inf, -inf, -inf]
+
+# softmax → P('"')=0.60, P("5")=0.40
+# 模型倾向输出字符串，但数字也有机会
+```
+
+### 为什么不后处理修 JSON？
+
+| 方案 | 问题 |
+|------|------|
+| 生成后正则修复 | 结构性错误无法修，如嵌套括号不匹配 |
+| 让模型重试 | 浪费 2-3x 算力，且不保证成功 |
+| **引导解码** | **一次生成，0% 失败率，零额外算力** |
+
+---
+
+## 5.6 动画演示
+
+提供 3Blue1Brown 风格的 Manim 动画，可视化整个 JSON 引导解码过程：
+
+```bash
+# 安装 manim (如果未安装)
+pip install manim
+
+# 低质量预览（开发时用）
+cd advanced/adv15_guided_decoder
+manim -pql json_guided_animation.py JSONGuidedScene
+
+# 高质量渲染
+manim -pqh json_guided_animation.py JSONGuidedScene
+```
+
+动画包含 4 幕：
+1. **自由生成 vs 引导生成** — 对比错误率
+2. **JSON 有限状态机** — 状态转移的可视化
+3. **逐 token 掩码流程** — 实际生成 `{"val":42}` 的每一步
+4. **Logits Masking 数学** — 柱状图展示 -inf mask 和 softmax 效果
+
+---
+
 ## 6. 运行
 
 ```bash
@@ -189,3 +294,9 @@ Guided Decoding 可直接应用于 Function Call 场景：
 - 约束模型输出严格合法的 JSON（函数名 + 参数）
 - 结合 JSON Schema 生成参数值时逐字段约束类型
 - adv16 将展示如何在 mini-vLLM 中端到端集成工具调用流程
+
+**adv17 — Logits Tricks 工具箱**
+
+引导解码是 logits 操控的一种形式，更多轻量技巧见 adv17：
+- Logit Bias（偏置注入）、Force Tokens（强制 yes/no）、Ban Tokens（禁止词）
+- Logprobs 提取（置信度打分）、Prefix Forcing（前缀强制）
