@@ -1,4 +1,4 @@
-# adv11: AFD (Attention-FFN Disaggregation)
+# adv11: AFD (Attention-FFN Disaggregation)注意力前馈网络分离
 
 > **教学声明**: 本模块使用 `time.sleep` 模拟计算耗时,不涉及真实 GPU 计算。
 > 所有"设备"均为 Python 对象,所有"耗时"均为人为设定的参数。

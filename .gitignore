@@ -51,3 +51,6 @@ config.local.*
 
 # benchmark 输出（可能含机器信息）
 benchmark_results/
+
+#claude 相关
+.claude/
