@@ -49,16 +49,68 @@
 
 ## 实现细节
 
-### TOOL_SCHEMA：工具注册表
+### TOOL_SCHEMA：工具注册表（JSON Schema 格式）
+
+本教学版采用与 OpenAI function calling 相同的 JSON Schema 规范来描述工具：
 
 ```python
-TOOL_SCHEMA = {
-    "get_weather": {"args": ["city"], "returns": "str"},
-    "calculator":  {"args": ["expr"], "returns": "str"},
-}
+TOOL_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "查询指定城市的当前天气",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "城市名称，如 '北京'、'上海'",
+                    },
+                },
+                "required": ["city"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": "计算数学表达式，返回计算结果",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expr": {
+                        "type": "string",
+                        "description": "合法的数学表达式，如 '2+3*4'",
+                    },
+                },
+                "required": ["expr"],
+            },
+        },
+    },
+]
 ```
 
-真实框架里工具用 JSON Schema 描述参数类型，guided decoder 据此约束输出。教学版用简化的字典。
+**为什么用 JSON Schema？** 这正是 guided decoder（adv15）能约束模型输出的关键：
+
+```
+真实框架中 JSON Schema → Guided Decoder 的工作流程：
+
+  1. 从 TOOL_SCHEMA 提取 parameters 字段的 JSON Schema
+     → {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+  2. Guided Decoder 把 JSON Schema 编译为有限状态机 (FSM)
+     → 状态: START → { → "city" → : → " → [任意字符]* → " → } → END
+
+  3. 推理时，每一步只允许模型从"当前状态的合法后继 token"中采样
+     → 保证输出 100% 是合法的、符合 schema 的 JSON
+
+  结果：模型输出永远是 {"city": "北京"} 这样的合法参数对象
+       下游 parse_tool_call 一定能解析，不会崩
+```
+
+这与 `build_system_prompt()` 配合使用：schema 既写入 system prompt（让模型"知道"工具存在），又传给 guided decoder（在解码层面"强制"输出格式合法）。
 
 ### parse_tool_call：从文本里抠出工具调用
 
@@ -168,7 +220,8 @@ results = asyncio.gather(
 | 维度 | 教学版 | 真实框架 |
 |------|--------|----------|
 | 模型 | `fake_model_output` 脚本驱动 | 真 LLM 生成工具调用 |
-| 输出约束 | 假设已是合法 JSON | adv15 guided decoder / JSON Schema 强约束 |
+| 工具描述 | JSON Schema（与 OpenAI 规范一致） | JSON Schema + guided decoder 编译为 FSM |
+| 输出约束 | 假设已是合法 JSON | adv15 guided decoder 从 schema 编译 FSM 强约束 |
 | 工具执行 | 本地函数 | 外部 HTTP API / 数据库 / 代码沙箱 |
 | 循环 | 固定 max_iters | 模型自主决定何时收敛（生成 `final_answer`） |
 | 多工具并行 | 串行 | OpenAI parallel tool calls |
@@ -200,6 +253,6 @@ python run.py
 
 ## 下一步
 
-adv01–adv16 至此全部完成。回到主系列 [`SUMMARY.md`](../../SUMMARY.md) 查看完整优化手段速查表，或复习主系列任意一步对比进阶版与教学版差异。
+adv01–adv16 至此全部完成。回到 [推理优化总结](../../summary_overview.md) 查看完整优化手段速查表，或复习主系列任意一步对比进阶版与教学版差异。
 
 本进阶系列覆盖的 16 项与主系列 15 步合起来，构成了一个相对完整的 LLM 推理优化知识地图：精度控制 → 解码加速 → 缓存结构 → 大规模并行 → 分离式架构 → 模型架构变体 → 服务工程。

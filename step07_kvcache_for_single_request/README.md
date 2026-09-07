@@ -1,4 +1,14 @@
-# 单请求 KV Cache — 单请求 KV Cache
+# 单请求 KV Cache
+
+> 生成第 100 个 token 时，前 99 个 token 的 K/V 被重算了 100 遍——但它们一次都没变过。KV Cache 就是把算过的 K/V 存起来，每步只算新 token。
+
+## 这一章做什么？
+
+给 Attention 层加上 KV Cache，把推理分成 Prefill（一次性处理 prompt）和 Decode（每步只算 1 个新 token）两个阶段。完成后你会看到：序列越长，KV Cache 引擎比朴素引擎越快，且两者输出完全一致——KV Cache 只是优化，不改变数学结果。
+
+上一章我们实现了完整的采样策略。但不管用哪种采样，瓶颈都在前面的 Transformer 前向计算：朴素引擎每步都重跑整个序列。这一章要消除这个 O(n²) 的重复计算。
+
+---
 
 ## 为什么需要 KV Cache？
 
@@ -424,36 +434,14 @@ KV Cache 效果 — NaiveEngine vs KVCacheEngine
 
 ---
 
+## 小结
+
+KV Cache 的核心洞察：历史 token 的 K/V 只取决于自身位置和权重，不会因为新 token 的到来而改变，所以算一次就可以永久复用。推理被分成 Prefill（一次性处理 prompt，填满 KV Cache）和 Decode（每步只算 1 个新 token 的 Q/K/V，拼接历史 KV 做注意力）两个阶段。本步用 `torch.cat` 每步拼接，语义清晰但每步都要复制全部历史数据（O(n²) 内存搬运），生产系统会用预分配 + in-place 写入来消除这个开销。
+
+---
+
 ## 下一步
 
-单请求 KV Cache 解决了单个请求的重复计算问题。
+单请求的重复计算问题解决了。但实际推理服务要同时服务多个用户——用户 A 的 prompt 500 token，用户 B 才 20 token，它们的 KV Cache 长度完全不同。怎么把多个请求塞进同一个 GPU batch？长度不一时要 padding，padding 的计算全是浪费。浪费到底有多严重？
 
-但实际推理服务需要**同时服务多个用户**，每个请求的 prompt 长度不同、生成进度不同。
-直接把多个请求的 KV Cache 拼在一起，会遇到两个问题：
-
-**问题1：显存碎片化**
-
-每个请求的生成长度事先未知，只能按最坏情况（max_len）预分配：
-
-```
-请求 A：实际生成  50 token，预分配 2048 → 浪费 97.6%
-请求 B：实际生成 2000 token，预分配 2048 → 几乎用满
-请求 C：实际生成  10 token，预分配 2048 → 浪费 99.5%
-```
-
-大量显存被"占着但没用"，新请求看到显存不够就只能排队——即使实际有效数据只占了显存的一小部分。
-
-**问题2：序列对齐**
-
-GPU 矩阵乘法要求 batch 内所有序列形状相同，但各请求长度不一：
-
-```
-请求 A：已生成 512 token，KV shape = [512, heads, d_head]
-请求 B：已生成 128 token，KV shape = [128, heads, d_head]
-请求 C：已生成 300 token，KV shape = [300, heads, d_head]
-```
-
-必须 padding 到同一长度（512），B 和 C 要对大量填充位置做无意义的注意力计算，浪费算力，且请求长度差异越大，浪费越严重。
-
-→ **多请求 KV Cache + Static Batching**：多请求 Batch 推理——如何让多个请求共享一次 GPU 前向，同时管理各自的 KV Cache？
-多请求 KV Cache + Static Batching 用 attention mask 解决对齐问题；PagedAttention：分页内存管理 的 PagedAttention 则从根本上消除显存碎片化。
+→ **多请求 KV Cache + Static Batching**——把多个请求 pad 到同一长度后批量前向，实测 Prefill padding 浪费约 46%、Decode 空转浪费约 29%。

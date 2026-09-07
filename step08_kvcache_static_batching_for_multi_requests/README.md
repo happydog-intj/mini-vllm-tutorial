@@ -1,25 +1,12 @@
-# 多请求 KV Cache + Static Batching — 多请求 KV Cache + Static Batching
+# 多请求 Static Batching
 
-## 背景：单请求 KV Cache 解决了单请求，但生产环境需要同时服务多个用户
+> 一个用户独占整张 GPU 太浪费，但把多个请求拼成 batch 又必须 padding 到同一长度——padding 的计算全是白做。Static Batching 的加速和浪费，同时存在。
 
-单请求 KV Cache 引入了 KV Cache，让单个请求的推理从 O(n²) 降到 O(n)。但实际推理服务面对的是**多个并发用户**：
+## 这一章做什么？
 
-```
-用户 A：发了一条长 prompt（500 token），正在生成回复
-用户 B：刚发来一条短 prompt（20 token），等待处理
-用户 C：prompt 100 token，已生成到一半
-用户 D：prompt 300 token，刚开始生成
-```
+实现一个 Static Batching 引擎，把多个请求 pad 到同一长度后批量前向。实测两个关键数字：Prefill padding 浪费约 46%、Decode 空转浪费约 29%。这两个数字就是后续 Continuous Batching 和 PagedAttention 要消灭的目标。
 
-最朴素的做法是逐个处理——处理完 A 再处理 B。但这样 GPU 一次只服务一个用户，算力严重浪费。
-
-**解决思路：把多个请求合并成一个 batch，一次 GPU 前向同时推进所有请求。**
-
-这就是 **Static Batching**：在请求进来时把它们凑成一批，padding 到同一长度后一起送入模型。本章要理解它带来的加速，以及它的局限性（padding 浪费、完成时间不一导致的空转）。
-
-## 教学目标
-
-理解 Static Batching 必须做的 padding 操作，以及 GPU 并行矩阵乘法如何带来加速——以及 padding 带来的浪费代价。
+上一章我们用 KV Cache 解决了单请求的重复计算。但 GPU 一次只服务一个用户，数千个计算单元大部分在空转。这一章把多个请求合并成 batch，让 GPU 真正忙起来——同时暴露 Static Batching 的两大浪费。
 
 ---
 
@@ -315,3 +302,17 @@ Static Batching 的两大问题：
   1. Prefill padding：46% 的 prefill 计算是无效填充  ⚠️
   2. Decode idle：    29% 的 decode 步骤是空转等待  ⚠️
 ```
+
+---
+
+## 小结
+
+Static Batching 把多个请求 pad 到同一长度后批量前向，用 GPU 并行矩阵乘法换取吞吐提升。代价有两个：Prefill 阶段短请求被 pad 到最长长度，填充位置的计算全部浪费（实测约 46%）；Decode 阶段短请求先完成但占着 GPU 槽位空转，等最长请求跑完才能释放（实测约 29%）。两个数字的根因是同一个——**Static Batching 的调度粒度太粗**：一整批请求捆绑在一起，中途不能增减。
+
+---
+
+## 下一步
+
+Decode 空转浪费 29%，因为短请求完成后不能及时让出槽位给新请求。如果调度器能在**每一步 decode** 后检查哪些请求已完成、哪些新请求可以插入，槽位就能一直被有效请求占满。这种"逐步调度"能做到吗？
+
+→ **Continuous Batching**——每步 decode 后动态增删请求，GPU 槽位永远被有效请求占满，消灭空转浪费。

@@ -1,10 +1,16 @@
-# Continuous Batching 调度器 — 连续批处理 Scheduler
+# Continuous Batching 调度器
 
-## 教学目标
+> Static Batching 里，请求 B 第 10 步就完成了，但它的 GPU 槽位要等请求 A 跑到第 500 步才能释放。Continuous Batching 的核心就一句话：**哪个请求完成了就立刻换一个新的进来**。
 
-理解 Static Batching 的根本缺陷，以及 Continuous Batching 如何解决它。
+## 这一章做什么？
 
-## 多请求 KV Cache + Static Batching 的遗留问题
+实现一个 Continuous Batching 调度器：每步 decode 后检查哪些请求已完成，立刻释放槽位并补入新请求。对比 Static Batching，GPU 槽位从"等最长请求"变成"永远被有效请求占满"。
+
+上一章 Static Batching 暴露了两大浪费：Prefill padding 46%、Decode 空转 29%。这一章先解决 Decode 空转——让调度粒度从"整批"细化到"每步"。
+
+---
+
+## Static Batching 的遗留问题
 
 多请求 KV Cache + Static Batching 实现了 Static Batching：把多个请求合并成一个 batch，
 利用 GPU 并行矩阵乘法提升吞吐量。
@@ -426,7 +432,16 @@ python run.py
 本步 run.py 模拟 8 个并发请求（输出长度各不相同），
 对比 Static Batching 和 Continuous Batching 的总完成时间。
 
+---
+
+## 小结
+
+Continuous Batching 把调度粒度从"整批"细化到"每步 decode"：每完成一步就检查哪些请求已结束，立刻释放槽位并补入新请求。GPU 槽位从此不再空转。调度逻辑本身不依赖特殊硬件或 FlashAttention，但高效实现需要两个配套：PagedAttention 解决 KV Cache 动态分配的碎片问题，FlashAttention varlen 解决变长序列的并行注意力计算问题——这两个分别在后续章节引入。
+
+---
+
 ## 下一步
 
-Chunked Prefill：切片长 Prompt：如果来了一个超长 prompt（1000 个 token），它的 prefill
-会占用整个 step，让其他请求的 decode 完全停下来等——Chunked Prefill 解决这个问题。
+Continuous Batching 解决了 Decode 空转。但如果来了一个 4096 token 的长 prompt，它的 Prefill 要 1.3 秒——期间所有正在 Decode 的请求全部卡住，用户看到屏幕上的字突然停了。怎么让长 Prefill 不阻塞 Decode？
+
+→ **Chunked Prefill**——把长 Prefill 切成小块，每步只处理 chunk_size 个 token，剩余时间留给 Decode 请求。

@@ -52,6 +52,13 @@ config.local.*
 # benchmark 输出（可能含机器信息）
 benchmark_results/
 
+# honkit / GitBook / VitePress
+_book/
+node_modules/
+.vitepress/dist/
+.vitepress/cache/
+
 #claude 相关
 .claude/
 advanced/*/media/
+.vercel

@@ -1,4 +1,14 @@
-# Preemption：抢占避免 OOM — Preemption 抢占
+# Preemption：抢占避免 OOM
+
+> 系统无法预知一个请求会生成 5 个 token 还是 500 个。KV Cache 撑满时，不抢占就崩溃——抢占是"优雅降级"和"全部丢失"之间的选择。
+
+## 这一章做什么？
+
+实现一个带抢占的调度器：当 KV Cache 即将耗尽时，用 LIFO 策略驱逐最晚进入的请求，释放显存，被驱逐的请求稍后从头恢复。对比无抢占版本（直接 OOM 崩溃），所有请求最终都能成功完成。
+
+上一章 Chunked Prefill 让长 Prefill 不再阻塞 Decode。但调度器一直在往 running 队列里塞新请求，KV Cache 总量只增不减。这一章要回答：**显存不够了怎么办？**
+
+---
 
 ## 为什么需要抢占？
 
@@ -216,12 +226,16 @@ Preemption：KV Cache 满时优雅降级 vs 崩溃
 `max_kv_slots=20` 故意设得很小（8 个请求 × 5 token prompt = 40，首步就超限），
 确保抢占一定会被触发，而不是偶发的边界情况。
 
+---
+
+## 小结
+
+抢占解决的是"KV Cache 耗尽时怎么办"。LIFO 策略驱逐最晚进入的请求（它们离完成最远，沉没成本最低），释放 KV Cache 后系统继续运行。被驱逐的请求插回 waiting 队首，稍后重新 Prefill 恢复。代价是重复计算——已生成的 token 全部丢弃，prompt 要重新跑一遍。进阶方案 Swap to CPU 可以把 KV Cache 暂存到 CPU 内存，恢复时搬回显存，避免重算。
+
+---
+
 ## 下一步
 
-现在系统能在内存不足时优雅降级，不会崩溃。
-但 KV Cache 的管理方式还很粗糙：每个请求的 KV Cache 是一整块 Tensor，
-长度固定为序列当前长度，无法在多个请求之间共享相同的 prompt 前缀。
+到这里，调度层面的核心机制已经齐全：KV Cache、Static Batching、Continuous Batching、Chunked Prefill、Preemption。但 KV Cache 的**内存管理**还很粗糙——每个请求的 KV Cache 是一整块连续 Tensor，长度按当前序列分配。请求完成后留下大小不一的"空洞"，新请求可能放不进去，明明有空间却 OOM。怎么像操作系统管理虚拟内存一样，把 KV Cache 切成固定大小的"页"来管理？
 
-**PagedAttention：分页内存管理 将引入 PagedAttention**：把 KV Cache 切成固定大小的"页"（Page），
-像操作系统管理虚拟内存一样管理显存，彻底解决内存碎片问题，
-并为 prefix caching（多个请求共享同一 system prompt 的 KV Cache）奠定基础。
+→ **PagedAttention：分页内存管理**——把 KV Cache 切成固定大小的 Block，按需分配，消灭碎片，显存利用率从 ~36% 提升到 ~96%。

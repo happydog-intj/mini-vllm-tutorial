@@ -1,4 +1,14 @@
-# 采样算法：logits → next_token — 采样算法：logits → next_token
+# 采样算法：logits → next_token
+
+> 模型输出的不是"答案"，是 5 万个词的概率分布。你怎么从中选一个 token，决定了模型是像背书一样重复，还是像人一样有创意。
+
+## 这一章做什么？
+
+实现五种采样策略：Greedy、Temperature、Top-k、Top-p、Gumbel-Max。用同一组 logits 走完每种策略的数学过程，理解"为什么 Temperature=0.5 会让分布更尖锐"、"Top-p 如何自适应候选集大小"。完成后你会拥有一个可配置的采样器，能直接嵌入推理引擎。
+
+上一章我们用朴素自回归推理跑通了完整的生成循环，但采样部分只用了 `argmax`——每步都选概率最高的那个 token。这一章要回答：**argmax 有什么问题？有哪些更好的选法？**
+
+---
 
 ## 为什么需要采样？Greedy 有什么问题？
 
@@ -304,10 +314,14 @@ Greedy 和低温（0.1）必然选 token 65；高温和其他策略结果取决�
 
 ---
 
+## 小结
+
+采样解决的核心问题是"从概率分布里怎么选 token"。Greedy 每步取最大值，确定但容易陷入重复循环；Temperature 通过缩放 logits 控制分布尖锐度；Top-k 固定候选集大小，Top-p 按概率质量自适应裁剪；Gumbel-Max 用噪声 + argmax 替代 softmax + multinomial，对 GPU 并行更友好。五种策略的核心区别在于"候选集怎么定"和"候选集内怎么选"。
+
+---
+
 ## 下一步
 
-多请求 KV Cache + Static Batching 要解决的新问题：**KV Cache**。
+到这里，我们已经有了完整的生成循环：Tokenizer → Embedding → Attention → Transformer → 自回归推理 → 采样。但性能呢？当前的 `NaiveEngine` 每生成一个新 token，都要把**整个已生成序列**重新喂给 Transformer——第 100 步时，前 99 个 token 的 K/V 矩阵被重复算了 100 遍，明明一次都没变过。怎么消除这个 O(n²) 的重复计算？
 
-当前的 `NaiveEngine` 每生成一个新 token，都要把整个已生成序列重新喂给 Transformer 做全量 attention 计算。生成第 n 个 token 时，前 n-1 个 token 的 Key/Value 矩阵其实没有变化，却被重复计算了 n 次。
-
-多请求 KV Cache + Static Batching 引入 KV Cache，把历史 token 的 K/V 矩阵缓存起来，让每步推理只计算最新 token 的 attention，把计算量从 O(n²) 降到 O(n)——这是 LLM 推理加速的核心机制。
+→ **单请求 KV Cache**——缓存历史 token 的 K/V 矩阵，让每步推理只计算最新 token，把计算量从 O(n²) 降到 O(n)。

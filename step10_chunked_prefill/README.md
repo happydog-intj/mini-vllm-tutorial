@@ -1,9 +1,14 @@
-# Chunked Prefill：切片长 Prompt — Chunked Prefill
+# Chunked Prefill：切片长 Prompt
 
-## 教学目标
+> 一个 4096 token 的长 prompt 做 Prefill 要 1.3 秒——期间 8 个正在 Decode 的用户全部卡住。Chunked Prefill 把长 Prefill 切成小块，每步只消化一小口，剩余时间留给 Decode。
 
-理解 Prefill 和 Decode 的计算特性差异，以及长 Prefill 如何阻塞 Decode，
-Chunked Prefill 如何通过分块混合调度解决这个问题。
+## 这一章做什么？
+
+给调度器加上 `chunk_size` 参数，让长 prompt 的 Prefill 分多步完成，每步最多处理 chunk_size 个 token。实现后你会看到：Decode 请求的 TPOT（每 token 延迟）从"被阻塞 1.3 秒"变成"每步多 20ms"。
+
+上一章 Continuous Batching 解决了 Decode 空转。但新请求进来时还是要一次性做完整个 Prefill——如果 prompt 很长，这段时间 GPU 被 Prefill 独占，Decode 请求全部停摆。这一章要打碎这个瓶颈。
+
+---
 
 ## Prefill 和 Decode 的根本差异
 
@@ -234,6 +239,16 @@ nano-vllm 的默认 `chunk_size=512`，在 TTFT 和 TPOT 之间取了一个平�
 python run.py
 ```
 
+---
+
+## 小结
+
+Chunked Prefill 把长 Prefill 切成 chunk_size 大小的小块，每步只处理一块，剩余时间留给 Decode 请求。Decode 的 TPOT 从"被整个 Prefill 阻塞"变成"每步多一个 chunk 的时间"。代价是新请求的 TTFT 变长（需要多步才能完成 Prefill），chunk_size 控制这个权衡。教学版每步严格 1-chunk + 1-decode 交替；真实 vLLM 把所有 token 拼成一次 forward，用 FlashAttention varlen 并行处理。
+
+---
+
 ## 下一步
 
-Preemption：抢占避免 OOM：Preemption——如果 KV Cache 显存装不下所有 running 请求怎么办？
+Continuous Batching + Chunked Prefill 让调度越来越灵活，但有一个隐患：系统不断接入新请求，每个请求的 KV Cache 随 decode 不断增长——生成长度在请求开始时是**未知的**。如果所有 running 请求的 KV Cache 总量超过了显存上限，怎么办？直接崩溃？
+
+→ **Preemption：抢占避免 OOM**——当 KV Cache 不够用时，主动驱逐低优先级请求，释放显存，系统继续运行而不是崩溃。

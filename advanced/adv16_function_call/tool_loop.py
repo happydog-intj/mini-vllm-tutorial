@@ -23,12 +23,89 @@ import json
 import re
 
 # ---------------------------------------------------------------------------
-# 工具 Schema（供外部引用）
+# 工具 Schema（JSON Schema 格式，与 OpenAI function calling 规范一致）
 # ---------------------------------------------------------------------------
-TOOL_SCHEMA = {
-    "get_weather": {"args": ["city"], "returns": "str"},
-    "calculator":  {"args": ["expr"],  "returns": "str"},
-}
+TOOL_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "查询指定城市的当前天气",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "城市名称，如 '北京'、'上海'",
+                    },
+                },
+                "required": ["city"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": "计算数学表达式，返回计算结果",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expr": {
+                        "type": "string",
+                        "description": "合法的数学表达式，如 '2+3*4'",
+                    },
+                },
+                "required": ["expr"],
+            },
+        },
+    },
+]
+
+# 便于按 name 查找的索引
+_TOOL_INDEX = {t["function"]["name"]: t for t in TOOL_SCHEMA}
+
+
+def get_tool_names() -> list[str]:
+    """返回所有已注册工具的名称列表。"""
+    return list(_TOOL_INDEX.keys())
+
+
+def get_tool_json_schema(name: str) -> dict | None:
+    """返回指定工具的 parameters JSON Schema（用于 guided decoder 约束输出）。"""
+    tool = _TOOL_INDEX.get(name)
+    if tool is None:
+        return None
+    return tool["function"]["parameters"]
+
+
+def build_system_prompt() -> str:
+    """
+    将工具 Schema 格式化为 system prompt，让模型知道有哪些工具可用。
+
+    这是真实框架的做法：把完整的 JSON Schema 写入 system prompt，
+    模型根据 schema 生成符合格式的工具调用。
+    """
+    tool_descriptions = []
+    for tool in TOOL_SCHEMA:
+        func = tool["function"]
+        params = func["parameters"]
+        param_desc = ", ".join(
+            f'{name}: {prop["type"]} ({prop.get("description", "")})'
+            for name, prop in params["properties"].items()
+        )
+        required = params.get("required", [])
+        tool_descriptions.append(
+            f'  - {func["name"]}({param_desc})\n'
+            f'    描述: {func["description"]}\n'
+            f'    必填参数: {required}'
+        )
+
+    return (
+        "你有以下工具可用。需要时输出 JSON 格式的工具调用 "
+        '{"name": "<tool_name>", "args": {<参数>}}，不需要时直接回答。\n\n'
+        "可用工具：\n" + "\n".join(tool_descriptions)
+    )
 
 
 # ---------------------------------------------------------------------------

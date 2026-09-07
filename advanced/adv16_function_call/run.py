@@ -17,6 +17,9 @@ from tool_loop import (
     parse_tool_call,
     execute_tool,
     tool_loop,
+    build_system_prompt,
+    get_tool_names,
+    get_tool_json_schema,
 )
 
 
@@ -121,12 +124,30 @@ def run_tool_loop_demo() -> None:
 
 
 def show_tool_schema() -> None:
-    """打印工具 Schema（教学信息）。"""
+    """打印工具 Schema（JSON Schema 格式，与 OpenAI function calling 一致）。"""
     print("=" * 60)
-    print("注册的工具 Schema")
+    print("注册的工具 Schema（JSON Schema 格式）")
     print("=" * 60)
-    for name, spec in TOOL_SCHEMA.items():
-        print(f"  {name}: args={spec['args']}, returns={spec['returns']}")
+    for tool in TOOL_SCHEMA:
+        func = tool["function"]
+        params = func["parameters"]
+        props = params["properties"]
+        required = params.get("required", [])
+        print(f"  {func['name']}:")
+        print(f"    描述: {func['description']}")
+        for pname, pspec in props.items():
+            req_mark = " (必填)" if pname in required else ""
+            print(f"    - {pname}: {pspec['type']}{req_mark} — {pspec.get('description','')}")
+    print()
+    print("System Prompt（注入模型上下文）:")
+    print("-" * 60)
+    print(build_system_prompt())
+    print("-" * 60)
+    print()
+    print(f"Guided Decoder 用 get_tool_json_schema('get_weather') 获取约束:")
+    schema = get_tool_json_schema("get_weather")
+    import json
+    print(f"  {json.dumps(schema, ensure_ascii=False, indent=2)}")
     print()
 
 

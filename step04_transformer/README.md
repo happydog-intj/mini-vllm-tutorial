@@ -1,13 +1,12 @@
-# Transformer Decoder 层：组装完整计算单元 — Transformer：完整 Decoder 层
+# Transformer Decoder 层：组装完整计算单元
 
-## 教学目标
+> 注意力负责"看"，MLP 负责"想"，残差连接让梯度畅通无阻。三个组件拼在一起，就是现代 LLM 的一层。
 
-在 Attention：词语间的关联计算 的注意力机制基础上，补全另外两个核心组件（MLP、归一化），并把三者组装成一个完整的 Transformer Decoder 层，理解每个设计决策背后的原因：
+## 这一章做什么？
 
-- 为什么用 Pre-Norm 而不是 Post-Norm？
-- 残差连接解决什么问题？
-- SwiGLU 比普通 ReLU MLP 好在哪里？
-- RMSNorm 为什么逐渐取代 LayerNorm？
+在上一章的注意力机制基础上，补全 MLP（SwiGLU）和归一化（RMSNorm）两个组件，把三者组装成一个完整的 Transformer Decoder 层，再堆叠两层构成一个能输出 logits 的小型语言模型。完成后你会理解现代 LLM（LLaMA、Qwen、Mistral）共用的 Pre-Norm + SwiGLU + RMSNorm 结构，以及每个设计决策背后的原因。
+
+---
 
 ## 问题背景：为什么需要这些设计？
 
@@ -228,6 +227,8 @@ TinyTransformer: 2层, d_model=128, heads=4, vocab=256
 
 因果性验证说明：修改序列最后一个 token，前面所有位置的 logits 不应该改变——这验证了因果注意力掩码正确工作，模型只能看到当前及之前的 token。
 
+---
+
 ## 设计权衡总结
 
 | 选择 | 现代做法 | 原版做法 | 改变的原因 |
@@ -237,6 +238,16 @@ TinyTransformer: 2层, d_model=128, heads=4, vocab=256
 | 归一化方式 | RMSNorm | LayerNorm | 计算更简单，效果相近 |
 | 偏置 | 大多数线性层无偏置 | 有偏置 | 减少参数，训练更稳定 |
 
+---
+
+## 小结
+
+一个 Transformer Decoder 层 = Pre-Norm + Attention + 残差 + Pre-Norm + MLP + 残差。Attention 负责 token 间的信息交换，MLP（SwiGLU）负责非线性特征变换，RMSNorm 稳定每层的输入分布，残差连接给梯度开高速公路。现代 LLM 就是把这样的层堆叠几十到上百层，再加一个 Embedding 输入和 LM Head 输出。
+
+---
+
 ## 下一步
 
-完整的 Transformer Decoder 层已经就绪。下一步（朴素自回归推理）将用这个结构搭建最朴素的自回归推理循环：每次生成一个 token，把它追加到序列末尾，再喂入模型预测下一个——这是理解所有后续优化的基准起点。
+Tokenizer、Embedding、Attention、Transformer——四个基础组件都就绪了。但我们还没真正"生成"过文字。怎样用这个模型一个 token 一个 token 地写出一句话？
+
+→ **朴素自回归推理**——每次生成一个 token，追加到序列末尾，再喂入模型预测下一个。这是理解所有后续优化的基准起点，也是我们第一次看到 O(n²) 的性能问题。

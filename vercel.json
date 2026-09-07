@@ -1,0 +1,5 @@
+{
+  "buildCommand": "npx vitepress build",
+  "outputDirectory": ".vitepress/dist",
+  "installCommand": "npm install"
+}
