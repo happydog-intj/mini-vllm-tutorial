@@ -8,6 +8,10 @@ export default defineConfig({
   description: '20步学懂 vLLM 核心原理，从 Tokenizer 到 PagedAttention 到 HTTP 服务',
   base,
 
+  sitemap: {
+    hostname: 'https://mini-vllm-tutorial.vercel.app',
+  },
+
   head: [
     ['meta', { name: 'author', content: 'happydog-intj' }],
     ['meta', { name: 'keywords', content: 'vLLM,LLM推理,KV Cache,PagedAttention,FlashAttention,CUDA Graph,Tensor Parallel,推理引擎,大模型推理' }],
