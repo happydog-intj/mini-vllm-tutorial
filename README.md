@@ -2,6 +2,8 @@
 
 从零实现 LLM 推理引擎：15步学懂 vLLM 核心原理
 
+📖 **在线阅读**：[Vercel](https://mini-vllm-tutorial.vercel.app) | [GitHub Pages](https://happydog-intj.github.io/mini-vllm-tutorial/)
+
 ## 学习路线
 
 ```
