@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://mini-vllm-tutorial.vercel.app/sitemap.xml
