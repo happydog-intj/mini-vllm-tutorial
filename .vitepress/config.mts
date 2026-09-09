@@ -1,12 +1,37 @@
+import { readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { defineConfig } from 'vitepress'
 
 const base = process.env.VITEPRESS_BASE || '/'
+
+// Map all sub-directory README.md → index.md so that
+// /step01_tokenizer/ resolves instead of requiring /step01_tokenizer/README.html
+function buildReadmeRewrites(dir: string, prefix = ''): Record<string, string> {
+  const map: Record<string, string> = {}
+  for (const entry of readdirSync(dir)) {
+    if (['node_modules', '.vitepress', '.git', '.claude', 'public'].includes(entry)) continue
+    const full = join(dir, entry)
+    if (!statSync(full).isDirectory()) continue
+    const rel = prefix ? `${prefix}/${entry}` : entry
+    try {
+      const files = readdirSync(full)
+      if (files.includes('README.md')) {
+        map[`${rel}/README.md`] = `${rel}/index.md`
+      }
+    } catch { /* skip unreadable dirs */ }
+    // recurse one more level (advanced/adv*)
+    Object.assign(map, buildReadmeRewrites(full, rel))
+  }
+  return map
+}
 
 export default defineConfig({
   lang: 'zh-CN',
   title: '从零实现 LLM 推理引擎',
   description: '20步学懂 vLLM 核心原理，从 Tokenizer 到 PagedAttention 到 HTTP 服务',
   base,
+
+  rewrites: buildReadmeRewrites(join(import.meta.dirname, '..')),
 
   sitemap: {
     hostname: 'https://mini-vllm-tutorial.vercel.app',
